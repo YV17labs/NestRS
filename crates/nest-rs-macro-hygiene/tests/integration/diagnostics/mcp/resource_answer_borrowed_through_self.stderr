@@ -1,0 +1,13 @@
+error[E0261]: use of undeclared lifetime name `'a`
+  --> tests/integration/diagnostics/mcp/resource_answer_borrowed_through_self.rs:19:58
+   |
+14 | #[tools]
+   |         - lifetime `'a` is missing in item created through this procedural macro
+...
+19 |     async fn note<'a>(&'a self, id: u32) -> Result<Json<&'a str>, McpError> {
+   |                                                          ^^ undeclared lifetime
+   |
+help: consider introducing lifetime `'a` here
+   |
+14 | #[tools]<'a>
+   |         ++++

@@ -1,0 +1,14 @@
+error[E0505]: cannot move out of `order` because it is borrowed
+  --> tests/integration/diagnostics/resilience/resilient_record_if_consumes_an_argument.rs:35:26
+   |
+35 |     #[resilient(carrier, record_if = |_error| !order.is_empty())]
+   |                          ^^^^^^^^^   --------  ----- borrow occurs due to use in closure
+   |                          |           |
+   |                          |           borrow of `order` occurs here
+   |                          move out of `order` occurs here
+36 |     async fn ship(&self, order: String) -> Answer<usize> {
+   |                                            ------ borrow later used by call
+37 |         send(order).await
+   |              ----- move occurs due to use in closure
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

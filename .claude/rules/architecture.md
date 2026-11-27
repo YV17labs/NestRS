@@ -166,7 +166,7 @@ supersedes a bare import; two fail the boot
 its path; the default instance, `Unnamed`, inserts nothing. A resource opened
 more than once names the instance as a type argument where it is imported bare,
 written as a type (`RedisModule<Cache>`, `<Vendor><Port>Module<Cache>`, which
-`#[module]` holds by warning of the turbofish), and in the value
+`#[module]` holds by refusing the turbofish), and in the value
 where its `for_root` pins it: `x` for the default, `(Cache, x)` for a named
 one. Each instance pins once; two instances never
 contest. A database is never opened twice: `Repo` holds one connection per

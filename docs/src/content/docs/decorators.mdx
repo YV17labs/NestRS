@@ -179,6 +179,12 @@ payload, a WS message and a tool's arguments all take them, from one path:
 | `#[readiness]` | method | Binds the method to the readiness probe | [Indicators](/health/indicators/) |
 | `#[startup]` | method | Binds the method to the startup probe | [Indicators](/health/indicators/) |
 
+## Resilience
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[resilient]` | method | Runs an `async fn`'s body under the policy a field holds: once, or `idempotent` again after an `Err` or a timeout. Keys: `timeout`, and beside `idempotent` `retries`, `retry_if` and `retry_ok_if`, in place of the policy's or to say which answer is sent again; `record_if` for which `Err` is a failure in the breaker; `fallback` and `fallback_if` for the method answering in place of the error a run ends on; `cancel` for the attempt's `CancellationToken` in the body | [Resilience](/fundamentals/resilience/), [Failures and fallbacks](/fundamentals/failures-and-fallbacks/) |
+
 ## Config
 
 | Decorator | Goes on | Summary | Read more |

@@ -1,0 +1,61 @@
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:35:5
+   |
+35 |     #[resilient(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:41:5
+   |
+41 |     #[shielded(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `shielded` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:47:5
+   |
+47 |     #[resilient(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:53:5
+   |
+53 |     #[shielded(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `shielded` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:59:5
+   |
+59 |     #[cfg_attr(all(), resilient(carrier, idempotent))]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:65:5
+   |
+65 |     #[resilient(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:72:5
+   |
+72 |     #[shielded(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `shielded` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[resilient] `cancel` needs a value — write `cancel = token`
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:77:26
+   |
+77 |     #[resilient(carrier, cancel)]
+   |                          ^^^^^^
+
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:78:5
+   |
+78 |     #[shielded(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `shielded` (in Nightly builds, run with -Z macro-backtrace for more info)

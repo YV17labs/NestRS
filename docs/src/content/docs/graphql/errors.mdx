@@ -14,10 +14,12 @@ error's **type**, so a client reads only what someone meant it to read:
   and a stable `extensions.code`, with its problem type's `extensions.type`
   and `extensions.title` and its field map's `extensions.errors` when it has
   them;
-- the framework's own vocabulary found in the chain — a `Problem`, a pipe
-  rejection, a decode failure said without its value — answers in its own form;
+- a `Problem` found in the chain answers in its own form — a pipe rejection
+  carries one;
 - **anything else answers `"internal error"` under the `INTERNAL` code**, and its
-  whole chain is filed once at `error` on `nest_rs::graphql`.
+  whole chain is filed once at `error` on `nest_rs::graphql` — a decode failure
+  among them: an upstream's answer or a stored value that does not decode is the
+  server's failure.
 
 A return is fallible when it is spelled the way async-graphql reads one —
 `Result<T, E>` or `FieldResult<T>` — and anything else is a value: a payload
@@ -70,11 +72,15 @@ into an `async_graphql::Error` does not compile, because async-graphql's
 (`Result<T, MyError>`) and let its type decide.
 
 The framework rewrites every message that quotes a value the request carried.
-A decode failure: serde's sentence quotes the value it refused — a resolver
-returning a `serde_json` error, or an anyhow chain holding one, async-graphql's
-own `Json<T>` scalar coercing an argument — so `errors[].message` says where and
-what kind instead: `invalid type: a string, expected u64 at line 1 column 24`,
-under the `INVALID_ARGUMENT` code. A value from `variables`, or written in the
+A decode failure: serde's sentence quotes the value it refused, so where
+async-graphql's own `Json<T>` scalar coerces an argument, `errors[].message` says
+where and what kind instead,
+`invalid type: a string, expected u64 at line 1 column 24`, under the
+`INVALID_ARGUMENT` code. A resolver returning a `serde_json` error, or an anyhow
+chain holding one, answers `"internal error"` under `INTERNAL`, the failure filed
+without its value; one decoding its client's own text says so with
+`Problem::from(DecodeError::from(e))`, answered under `INVALID_ARGUMENT` the same
+way. A value from `variables`, or written in the
 document, that its argument's type refuses: async-graphql quotes it, and the
 message says it by kind — `enumeration type "Role" does not contain the value
 sent`, `an unknown field of type "PostFilter"`, `Expected input type "Int",

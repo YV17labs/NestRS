@@ -169,6 +169,10 @@ Milliseconds, not seconds: the only interval that matters here is one
 environment or pinned in code — an unbounded probe is what these fields exist
 to prevent, and a zero one fails every poll.
 
+The sooner of the two is the [`Deadline`](/fundamentals/execution-context/#what-a-unit-carries)
+each check runs under, so a call a check makes can give up before the probe drops
+it, as one [under a policy](/health/indicators/#a-check-under-a-policy) does.
+
 Indicators run **concurrently**, so a probe costs the slowest check
 rather than their sum, and adding a fifth indicator does not move the
 response's worst case.

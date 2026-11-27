@@ -4,7 +4,6 @@
 //! provided through `provide_unit_of_work` runs every lifecycle hook as a unit
 //! of its own.
 
-use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,9 +17,9 @@ use nest_rs_core::{
 };
 use nest_rs_database::__private::with_job_executor;
 use nest_rs_database::{
-    BACKEND_REMEDY, Executor, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured,
-    UnitOfWork, UnitSpec, current_executor, current_executor_scope, current_unit_of_work,
-    provide_unit_of_work, run_unit,
+    AtomicBlock, BACKEND_REMEDY, Executor, ExecutorScope, HeldPool, Holds, OpenUnit, OutboxKept,
+    Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, current_executor,
+    current_executor_scope, current_unit_of_work, provide_unit_of_work, run_unit,
 };
 
 const MESSAGE: Unit =
@@ -34,8 +33,18 @@ fn spec(scope: ExecutorScope) -> UnitSpec {
 struct Handle(TransactionPolicy);
 
 impl Executor for Handle {
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn holds(&self) -> Holds<'_> {
+        Holds::Pool(self)
+    }
+}
+
+impl HeldPool for Handle {
+    fn transaction(&self) -> Arc<dyn AtomicBlock> {
+        unreachable!("no test opens a block on a stub unit")
+    }
+
+    fn outbox(&self) -> Option<&dyn OutboxKept> {
+        None
     }
 }
 
@@ -207,7 +216,7 @@ async fn the_body_runs_on_the_units_executor_under_the_specs_scope() {
                 (
                     current_executor().is_some_and(|executor| {
                         executor
-                            .as_any()
+                            .holds()
                             .downcast_ref::<Handle>()
                             .is_some_and(|handle| handle.0 == TransactionPolicy::PerUnit)
                     }),
@@ -453,7 +462,7 @@ async fn a_continuation_that_outlives_the_unit_runs_on_a_pool_unit_of_the_same_b
             (
                 current_executor().and_then(|executor| {
                     executor
-                        .as_any()
+                        .holds()
                         .downcast_ref::<Handle>()
                         .map(|handle| handle.0)
                 }),

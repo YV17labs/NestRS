@@ -72,7 +72,6 @@ mod routes;
 mod scope;
 mod security_headers;
 mod server;
-mod shaper;
 mod site;
 mod sse;
 mod stall;
@@ -241,7 +240,6 @@ pub use response_body::OpenEndedBody;
 pub use route_template::RouteTemplate;
 pub use routes::HttpRoutes;
 pub use security_headers::HttpSecurityHeaders;
-pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
 pub use sse::{SseEvent, SseSettings, SseStream};
 pub use tls::HttpTls;
 pub use trace_context::{TRACERESPONSE_HEADER, UPSTREAM_REQUEST_ID_HEADER};
@@ -286,12 +284,10 @@ pub mod __private {
     pub use crate::pipe::piped;
     pub use crate::probe::ProbeHost;
     pub use crate::problem::{framework_sentence, method_not_allowed};
-    pub use crate::request::ServedRoute;
     pub use crate::response::{IntoResult, RouteReturn, RouteReturnFallback};
     pub use crate::route_site::{
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,
     };
-    pub use crate::shaper::{CaptureFn, GateFn, ShaperProbe, UnshapedProbe, shaped};
     pub use crate::transport::{
         join_path, literal_mount_path, normalize_mount_path, version_path, versions_declare,
     };

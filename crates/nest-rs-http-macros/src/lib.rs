@@ -47,8 +47,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Per-method attributes (all consumed; no imports needed):
 ///
 /// - `#[authorize(Action, Entity)]` — the route's authz posture: the class
-///   gate `nest_rs_authz::http::Authorize<A, E>` declares
-///   (`nest_rs_authz::class_gate`), run right after the guards and before any
+///   gate (`nest_rs_authz::class_gate`), run right after the guards and before any
 ///   interceptor or filter the route declares, and its reads under the caller's
 ///   ability, each wire row the handler answers judged for that caller.
 ///   Mutually exclusive with `#[public]`. `#[authorize(Action, bind = Service)]`

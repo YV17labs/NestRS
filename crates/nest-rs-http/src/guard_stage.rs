@@ -28,8 +28,10 @@ use crate::ambient::RejectedCredential;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
-use crate::shaper::GateFn;
 use crate::view::HttpView;
+
+/// A site's class gate: the pipeline's own.
+pub(crate) type GateFn = nest_rs_core::__private::ClassGate;
 
 /// What a request's guard stages attached so far, held on the request between a
 /// stage and the work its endpoint runs off its task.
@@ -111,8 +113,8 @@ pub(crate) struct HttpGuardStage {
 pub(crate) enum StageKind {
     /// A route.
     Route {
-        /// Neither its posture names a subject nor a shaper is armed on it, so
-        /// its reads are withheld what its guards attached.
+        /// Its posture names no subject, so its reads are withheld what its
+        /// guards attached.
         withheld: bool,
     },
     /// A self-mount's request: what the guards attached is also kept on the

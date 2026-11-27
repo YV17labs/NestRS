@@ -13,8 +13,8 @@
 //!
 //! **A push inside a unit of work holding a transaction is written into it.**
 //! Where the data driver keeps an outbox
-//! ([`Executor::write_outbox`](nest_rs_database::Executor::write_outbox)), the
-//! sealed jobs become records of the caller's transaction: they are filed
+//! ([`HeldTransaction::outbox`](nest_rs_database::HeldTransaction::outbox)),
+//! the sealed jobs become records of the caller's transaction: they are filed
 //! after its commit by the [`OutboxRelay`](crate::OutboxRelay), and never on
 //! its rollback. Anywhere else — a pool, no data driver — the backend files
 //! them at once.
@@ -22,7 +22,7 @@
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
-use nest_rs_database::OutboxRecord;
+use nest_rs_database::{Holds, OutboxKept, OutboxRecord};
 use serde_json::Value;
 
 use crate::backend::bounded;
@@ -231,32 +231,39 @@ pub(crate) async fn push_value(
     Ok(receipt)
 }
 
-/// Write `envelopes` into the outbox of the unit the push runs in, so they are
-/// filed after its commit and never on its rollback — `None` when the unit
-/// keeps none, and the backend files them now. Each record is sealed only once
-/// the handle reads it, so a push filed at once seals nothing twice. A delay is
-/// kept as what is left of it, which the relay hands the backend once the unit
-/// committed.
+/// Write `envelopes` into the outbox of the transaction the push runs in, so
+/// they are filed after its commit and never on its rollback — `None` on a
+/// pool, outside any unit and where the transaction keeps no outbox, and the
+/// backend files them now. A record is sealed only once an outbox takes it, so
+/// a push filed at once seals nothing twice. A delay is kept as what is left of
+/// it, which the relay hands the backend once the unit committed.
 async fn keep(
     queue: &QueueName,
     envelopes: &[Envelope],
     options: &PushOptions,
 ) -> Option<Result<(), QueueError>> {
     let executor = nest_rs_database::current_executor()?;
+    let Holds::Transaction(transaction) = executor.holds() else {
+        return None;
+    };
+    let outbox = transaction.outbox()?;
     let delay = options.delay().map_or(Duration::ZERO, |delay| match delay {
         Delay::For(wait) => wait,
         Delay::Until(at) => at.duration_since(SystemTime::now()).unwrap_or_default(),
     });
-    let written = executor.write_outbox(&mut envelopes.iter().map(|envelope| {
-        OutboxRecord::new(
-            queue.as_str(),
-            envelope.id().uuid(),
-            envelope.sealed(),
-            envelope.unique_key().map(str::to_owned),
-            delay,
-        )
-    }))?;
-    Some(written.await.map_err(QueueError::Outbox))
+    let records = envelopes
+        .iter()
+        .map(|envelope| {
+            OutboxRecord::new(
+                queue.as_str(),
+                envelope.id().uuid(),
+                envelope.sealed(),
+                envelope.unique_key().map(str::to_owned),
+                delay,
+            )
+        })
+        .collect();
+    Some(outbox.write(records).await.map_err(QueueError::Outbox))
 }
 
 /// Remove the record of a job not yet filed from the outbox of the unit the
@@ -266,14 +273,18 @@ async fn unkeep(queue: &QueueName, which: Unkeep<'_>) -> Result<bool, QueueError
     let Some(executor) = nest_rs_database::current_executor() else {
         return Ok(false);
     };
-    let removing = match which {
-        Unkeep::Job(id) => executor.remove_outbox(queue.as_str(), id.uuid()),
-        Unkeep::Key(key) => executor.remove_outbox_unique(queue.as_str(), key),
+    let kept: Option<&dyn OutboxKept> = match executor.holds() {
+        Holds::Pool(pool) => pool.outbox(),
+        Holds::Transaction(transaction) => transaction.outbox().map(|outbox| outbox as _),
     };
-    match removing {
-        Some(removing) => removing.await.map_err(QueueError::Outbox),
-        None => Ok(false),
+    let Some(kept) = kept else {
+        return Ok(false);
+    };
+    match which {
+        Unkeep::Job(id) => kept.remove(queue.as_str(), id.uuid()).await,
+        Unkeep::Key(key) => kept.remove_unique(queue.as_str(), key).await,
     }
+    .map_err(QueueError::Outbox)
 }
 
 /// The record a cancel names: by its job, or by its unique key.

@@ -2,7 +2,9 @@
 //! commit: its writes are one transaction settled on its answer, an event it
 //! emits waits for that commit, a pool listener's writes stand on their own,
 //! and a listener cut at its timeout rolls back and gives its connection back.
-//! A task emitting off every unit reaches the same through the app's binding.
+//! A task emitting off every unit reaches the same through the app's binding,
+//! and a listener `#[resilient]` decorates keeps it: a run failed or refused
+//! after its write leaves nothing committed.
 //!
 //! Each test runs over a one-connection pool and counts through it, so a count
 //! waits for the connection the listener's settle gives back.
@@ -13,6 +15,9 @@ use std::time::Duration;
 use nest_rs_core::{App, injectable, module};
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_events::{EventBus, EventsModule, listeners};
+use nest_rs_resilience::{
+    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+};
 use nest_rs_seaorm::__private::current_executor;
 use nest_rs_seaorm::{Repo, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, SeaOrmUnitOfWork};
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
@@ -364,7 +369,7 @@ impl RepoListeners {
 struct BoundModule;
 
 /// `event`, emitted by a task holding no unit of its own.
-async fn emitted_off_every_unit(bus: Arc<EventBus>, event: RowAsked) {
+async fn emitted_off_every_unit<E: Clone + Send + 'static>(bus: Arc<EventBus>, event: E) {
     let task = nest_rs_core::TaskContext::current().carry(async move { bus.emit(event).await });
     tokio::spawn(task).await.expect("the task ends");
 }
@@ -392,5 +397,203 @@ async fn a_listener_a_spawned_task_emits_to_settles_its_repo_write_on_its_answer
         crate::harness::committed_rows(&conn, table).await,
         1,
         "its `Ok` committed its write",
+    );
+}
+
+mod resilient_listener {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "listener_unit_resilient")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// What a decorated listener's call answers once it wrote its row.
+#[derive(Clone, Copy, Debug)]
+enum Then {
+    /// The dependency answers: the row commits.
+    Answers,
+    /// The dependency fails: the run ends on its error.
+    Fails,
+}
+
+#[derive(Clone)]
+struct RefundAsked {
+    then: Then,
+}
+
+/// A refund whose dependency never answers.
+#[derive(Clone)]
+struct RefundStalled;
+
+#[derive(Clone)]
+struct RestockAsked;
+
+#[derive(Debug, thiserror::Error)]
+enum Refund {
+    #[error("the refund's row was refused")]
+    Db(#[from] nest_rs_seaorm::RepoError),
+    #[error("the payment provider refused the refund")]
+    Refused,
+}
+
+impl nest_rs_core::ToProblem for Refund {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        None
+    }
+}
+
+#[injectable]
+struct ResilientListeners {
+    #[inject]
+    upstream: Arc<ResiliencePolicy>,
+    attempts: std::sync::atomic::AtomicU32,
+}
+
+#[listeners]
+impl ResilientListeners {
+    /// One row through `Repo`, then the call the event says, under the
+    /// policy's timeout, which only a hang reaches.
+    #[on_event]
+    #[resilient(upstream)]
+    async fn refund(&self, event: RefundAsked) -> Result<(), ResilienceError<Refund>> {
+        Repo::<resilient_listener::Entity>::insert_unscoped(
+            resilient_listener::ActiveModel::default(),
+        )
+        .await?;
+        match event.then {
+            Then::Answers => Ok(()),
+            Then::Fails => Err(Refund::Refused),
+        }
+    }
+
+    /// One row through `Repo`, then a call that never answers, given up at
+    /// the method's own timeout: a refusal.
+    #[on_event]
+    #[resilient(upstream, timeout = "200ms")]
+    async fn refund_stalled(&self, _event: RefundStalled) -> Result<(), ResilienceError<Refund>> {
+        Repo::<resilient_listener::Entity>::insert_unscoped(
+            resilient_listener::ActiveModel::default(),
+        )
+        .await?;
+        std::future::pending().await
+    }
+
+    /// One row through `Repo` each attempt, the first failing once it wrote
+    /// its own.
+    #[on_event]
+    #[resilient(upstream, idempotent)]
+    async fn restock(&self, _event: RestockAsked) -> Result<(), ResilienceError<Refund>> {
+        Repo::<resilient_listener::Entity>::insert_unscoped(
+            resilient_listener::ActiveModel::default(),
+        )
+        .await?;
+        if self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            == 0
+        {
+            return Err(Refund::Refused);
+        }
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [
+        SeaOrmModule::for_root(SeaOrmConfig {
+            url: crate::harness::url().into(),
+            ..Default::default()
+        }),
+        SeaOrmDatabaseModule,
+        EventsModule,
+        ResilienceModule::for_root(ResilienceConfig {
+            retries: Some(1),
+            backoff_first: Duration::from_millis(1),
+            backoff_ceiling: Duration::from_millis(2),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        }),
+    ],
+    providers = [ResilientListeners],
+)]
+struct ResilientModule;
+
+/// A decorated listener's unit is its transaction whatever its policy
+/// answers: a run failing or given up after its `Repo` write leaves nothing
+/// committed, an answer commits its row, and an idempotent run commits its
+/// retry's row alone, the failed attempt's rolled back in its savepoint.
+#[tokio::test]
+async fn a_decorated_listener_refused_or_failed_after_its_repo_write_leaves_nothing_committed() {
+    let conn = crate::harness::connect().await;
+    let table = "listener_unit_resilient";
+    crate::harness::fresh_table(&conn, table).await;
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = App::builder()
+        .module::<ResilientModule>()
+        .build()
+        .await
+        .expect("boots");
+
+    emitted_off_every_unit(bus(&app), RefundAsked { then: Then::Fails }).await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        0,
+        "the run's error rolled its unit's write back",
+    );
+    emitted_off_every_unit(bus(&app), RefundStalled).await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        0,
+        "the refusal rolled its unit's write back",
+    );
+    let failed = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed — dispatch continues with the next listener",
+    );
+    assert!(
+        failed
+            .field("error")
+            .is_some_and(|error| error.contains("the payment provider refused the refund")),
+        "{failed:#?}"
+    );
+    let refused = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed; unavailable — dispatch continues with the next listener",
+    );
+    assert_eq!(refused.level, "warn", "a `503`: {refused:#?}");
+    assert!(
+        refused
+            .field("error")
+            .is_some_and(|error| error.contains("the call did not answer within its timeout")),
+        "the refusal at the method's timeout: {refused:#?}"
+    );
+
+    emitted_off_every_unit(
+        bus(&app),
+        RefundAsked {
+            then: Then::Answers,
+        },
+    )
+    .await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        1,
+        "an answer committed its unit's write",
+    );
+
+    emitted_off_every_unit(bus(&app), RestockAsked).await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        2,
+        "the retry's row alone: the failed attempt's rolled back with its savepoint",
     );
 }

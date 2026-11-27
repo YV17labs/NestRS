@@ -149,7 +149,10 @@ impl HealthService {
 
     /// Run every indicator this app runs for `kind` **concurrently** and
     /// aggregate their results into a [`ProbeReport`], under the per-indicator
-    /// ceiling and the probe deadline of [`HealthConfig`]. The boot's wiring
+    /// ceiling and the probe deadline of [`HealthConfig`]: the sooner of the
+    /// two is the [`Deadline`](nest_rs_core::Deadline) each check runs under,
+    /// so a call it makes under a policy ends there, counted, before the
+    /// probe drops it. The boot's wiring
     /// step hands it the container before any hook runs; a service no boot
     /// wired (a hand-built container) reports `up` with no indicator run.
     pub async fn probe(&self, kind: ProbeKind) -> ProbeReport {
@@ -180,6 +183,9 @@ impl HealthService {
 }
 
 /// Run `entries` concurrently under both ceilings and fold them into a report.
+/// Each check runs under the sooner of the two as its
+/// [`Deadline`](nest_rs_core::Deadline), so what it calls can give up before
+/// the probe drops it.
 async fn run_indicators(
     entries: &[&Indicator],
     container: &Container,
@@ -187,6 +193,9 @@ async fn run_indicators(
     config: &HealthConfig,
 ) -> ProbeReport {
     let indicator_timeout = config.indicator_timeout;
+    let started = tokio::time::Instant::now();
+    let deadline = started + config.probe_deadline;
+    let cut = deadline.min(started + indicator_timeout);
     // Not `spawn`ed: the operation span and trace context are task-locals, and
     // a spawned check would file its `warn` under no unit of work.
     let mut running: FuturesUnordered<_> = entries
@@ -196,12 +205,12 @@ async fn run_indicators(
             // In the bounded call, so an indicator panicking before it hands
             // back its future is contained too.
             let check = async { (entry.run)(container).await };
+            let check = nest_rs_core::__private::with_deadline(Some(cut), check);
             let outcome = run_with_timeout(&entry.name, kind, check, indicator_timeout).await;
             (slot, outcome)
         })
         .collect();
 
-    let deadline = tokio::time::Instant::now() + config.probe_deadline;
     let mut outcomes: Vec<Option<(IndicatorStatus, Option<String>)>> = vec![None; entries.len()];
     loop {
         match tokio::time::timeout_at(deadline, running.next()).await {
@@ -696,6 +705,79 @@ mod tests {
         assert_eq!(event.field("deadline_ms").as_deref(), Some("900"));
         assert_eq!(event.field("answered").as_deref(), Some("1"));
         assert_eq!(event.field("unanswered").as_deref(), Some("1"));
+    }
+
+    /// Where an indicator's check leaves the deadline it ran under.
+    #[derive(Default)]
+    struct Seen(std::sync::Mutex<Option<Option<tokio::time::Instant>>>);
+
+    /// Whichever cut comes first is the deadline a check runs under: what it
+    /// calls — a policy, a client — gives up there, before the probe drops it.
+    #[tokio::test(start_paused = true)]
+    async fn a_check_runs_under_the_deadline_the_probe_cuts_it_at() {
+        for (indicator_timeout, probe_deadline, cut) in [(750, 900, 750), (900, 300, 300)] {
+            let container = Container::builder()
+                .provide(Seen::default())
+                .build()
+                .expect("the container builds");
+            let config = HealthConfig {
+                indicator_timeout: Duration::from_millis(indicator_timeout),
+                probe_deadline: Duration::from_millis(probe_deadline),
+            };
+            let entries = [entry("reads", |container| {
+                let seen = container.get::<Seen>().expect("provided");
+                Box::pin(async move {
+                    let deadline = nest_rs_core::__private::deadline();
+                    *seen.0.lock().expect("the seen") = Some(deadline);
+                    Ok(())
+                })
+            })];
+            let entries: Vec<&Indicator> = entries.iter().collect();
+
+            let started = tokio::time::Instant::now();
+            run_indicators(&entries, &container, ProbeKind::Readiness, &config).await;
+
+            let seen = container.get::<Seen>().expect("provided");
+            assert_eq!(
+                *seen.0.lock().expect("the seen"),
+                Some(Some(started + Duration::from_millis(cut))),
+                "an indicator of {indicator_timeout} ms in a probe of {probe_deadline} ms"
+            );
+        }
+    }
+
+    /// A unit the probe runs in ends no later for it: a request's deadline
+    /// sooner than both cuts stays the one a check runs under.
+    #[tokio::test(start_paused = true)]
+    async fn a_check_keeps_a_sooner_deadline_its_probe_runs_under() {
+        let container = Container::builder()
+            .provide(Seen::default())
+            .build()
+            .expect("the container builds");
+        let entries = [entry("reads", |container| {
+            let seen = container.get::<Seen>().expect("provided");
+            Box::pin(async move {
+                let deadline = nest_rs_core::__private::deadline();
+                *seen.0.lock().expect("the seen") = Some(deadline);
+                Ok(())
+            })
+        })];
+        let entries: Vec<&Indicator> = entries.iter().collect();
+
+        let request_ends = tokio::time::Instant::now() + Duration::from_millis(100);
+        nest_rs_core::__private::with_deadline(
+            Some(request_ends),
+            run_indicators(
+                &entries,
+                &container,
+                ProbeKind::Readiness,
+                &HealthConfig::default(),
+            ),
+        )
+        .await;
+
+        let seen = container.get::<Seen>().expect("provided");
+        assert_eq!(*seen.0.lock().expect("the seen"), Some(Some(request_ends)));
     }
 
     #[tokio::test(start_paused = true)]

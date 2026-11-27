@@ -32,82 +32,121 @@ pub fn cfg_attrs(attrs: &[Attribute]) -> Vec<TokenStream> {
         .collect()
 }
 
-/// A decorated method's attributes as another attribute macro can read them —
-/// every `#[cfg]` inside a `#[cfg_attr]` unfolded into a plain `#[cfg]`, and
-/// everything else as written.
+/// What of a decorated method's attributes — or of one of its parameters' —
+/// describes the field an expansion writes beside it, to the attribute macro
+/// that reads that field: `helper`, that macro's own attribute; its docs; its
+/// `#[cfg]`s, each one inside a `#[cfg_attr]` unfolded into a plain `#[cfg]`;
+/// and the lints it allows, an `#[expect]` as an `#[allow]` of the same lints
+/// and reason. Everything else is the method's alone, and is not here.
 ///
 /// async-graphql's `#[Object]` and `#[ComplexObject]` read a plain `#[cfg]`
 /// alone. `#[cfg_attr(p, cfg(x))]` unfolds to `cfg(any(not(p), x))`, not
-/// `cfg(all(p, x))`.
-pub fn delegated_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
-    let mut delegated = Vec::with_capacity(attrs.len());
+/// `cfg(all(p, x))`. The field trips some of the lints the method expects and
+/// not others, so an `#[expect]` is checked on the method alone. A `helper`
+/// inside a `#[cfg_attr]` is refused: the macro reading it expands before any
+/// condition is evaluated.
+pub fn field_attrs(attrs: &[Attribute], helper: &str) -> syn::Result<Vec<Attribute>> {
+    let mut described = Vec::new();
     for attr in attrs {
-        let unfolded = attr
-            .path()
-            .is_ident("cfg_attr")
-            .then(|| attr.meta.require_list().ok())
-            .flatten()
-            .and_then(|list| {
-                let mut tokens = Vec::new();
-                unfold_cfg_attr(&[], list.tokens.clone(), &mut tokens).then_some(tokens)
-            })
-            .and_then(|tokens| {
-                tokens
-                    .into_iter()
-                    .map(|tokens| {
-                        syn::parse::Parser::parse2(Attribute::parse_outer, tokens)
-                            .ok()
-                            .and_then(|mut parsed| parsed.pop())
-                    })
-                    .collect::<Option<Vec<_>>>()
-            });
-        match unfolded {
-            Some(unfolded) => delegated.extend(unfolded),
-            None => delegated.push(attr.clone()),
+        let path = attr.path();
+        if path.is_ident("doc")
+            || path.is_ident("cfg")
+            || path.is_ident("allow")
+            || path.is_ident(helper)
+        {
+            described.push(attr.clone());
+        } else if path.is_ident("expect")
+            && let syn::Meta::List(list) = &attr.meta
+        {
+            let lints = &list.tokens;
+            described.push(syn::parse_quote!(#[allow(#lints)]));
+        } else if path.is_ident("cfg_attr")
+            && let syn::Meta::List(list) = &attr.meta
+        {
+            let mut unfolded = Vec::new();
+            unfold_cfg_attr(&[], list.tokens.clone(), helper, &mut unfolded)?;
+            for tokens in unfolded {
+                described.extend(syn::parse::Parser::parse2(Attribute::parse_outer, tokens)?);
+            }
         }
     }
-    delegated
+    Ok(described)
 }
 
-/// The attributes one `cfg_attr(predicate, ..)` holds, under every enclosing
-/// predicate in `outer`, pushed onto `into` — `false` when the arguments are not
-/// the attribute's grammar, so the caller keeps it as written.
+/// What the entries of one `cfg_attr(predicate, ..)` describe of a field
+/// ([`field_attrs`]), under every enclosing predicate in `outer`, pushed onto
+/// `into`. Arguments that are not the attribute's grammar describe nothing:
+/// rustc refuses them on the method, which keeps them.
 fn unfold_cfg_attr(
     outer: &[TokenStream],
     arguments: TokenStream,
+    helper: &str,
     into: &mut Vec<TokenStream>,
-) -> bool {
+) -> syn::Result<()> {
     let mut entries = split_at_commas(arguments).into_iter();
     let Some(predicate) = entries.next().filter(|predicate| !predicate.is_empty()) else {
-        return false;
+        return Ok(());
     };
     let mut predicates = outer.to_vec();
     predicates.push(predicate);
     let conjunction = quote!(all(#(#predicates),*));
     for entry in entries {
         let entry = ungrouped_tokens(entry);
-        if entry.is_empty() {
+        let mut tokens = entry.clone().into_iter();
+        let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None) =
+            (tokens.next(), tokens.next(), tokens.next())
+        else {
+            continue;
+        };
+        if group.delimiter() != Delimiter::Parenthesis {
             continue;
         }
-        let mut tokens = entry.clone().into_iter();
-        match (tokens.next(), tokens.next(), tokens.next()) {
-            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None)
-                if name == "cfg" && group.delimiter() == Delimiter::Parenthesis =>
-            {
-                let condition = group.stream();
-                into.push(quote!(#[cfg(any(not(#conjunction), #condition))]));
-            }
-            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None)
-                if name == "cfg_attr" && group.delimiter() == Delimiter::Parenthesis =>
-            {
-                if !unfold_cfg_attr(&predicates, group.stream(), into) {
-                    return false;
-                }
-            }
-            _ => into.push(quote!(#[cfg_attr(#conjunction, #entry)])),
+        let inner = group.stream();
+        if name == "cfg" {
+            into.push(quote!(#[cfg(any(not(#conjunction), #inner))]));
+        } else if name == "cfg_attr" {
+            unfold_cfg_attr(&predicates, inner, helper, into)?;
+        } else if name == "expect" || name == "allow" {
+            into.push(quote!(#[cfg_attr(#conjunction, allow(#inner))]));
+        } else if name == helper {
+            return Err(syn::Error::new_spanned(
+                &entry,
+                format!(
+                    "`#[{helper}(…)]` inside a `#[cfg_attr]` would be read by nothing: the macro \
+                     reading it expands before any condition is evaluated — write it on a line \
+                     of its own, and put the condition on the method as a `#[cfg]`"
+                ),
+            ));
         }
     }
-    true
+    Ok(())
+}
+
+/// Whether an item is written `#[name]`, plainly or as an entry of a
+/// `#[cfg_attr]` at any depth, whatever its arguments.
+pub fn is_written(attrs: &[Attribute], name: &str) -> bool {
+    fn among(arguments: TokenStream, name: &str) -> bool {
+        split_at_commas(arguments).into_iter().skip(1).any(|entry| {
+            let mut tokens = ungrouped_tokens(entry).into_iter();
+            match (tokens.next(), tokens.next()) {
+                (Some(TokenTree::Ident(written)), Some(TokenTree::Group(group)))
+                    if written == "cfg_attr" =>
+                {
+                    among(group.stream(), name)
+                }
+                (Some(TokenTree::Ident(written)), next) => {
+                    written == name
+                        && !matches!(next, Some(TokenTree::Punct(punct)) if punct.as_char() == ':')
+                }
+                _ => false,
+            }
+        })
+    }
+    attrs.iter().any(|attr| {
+        attr.path().is_ident(name)
+            || (attr.path().is_ident("cfg_attr")
+                && matches!(&attr.meta, syn::Meta::List(list) if among(list.tokens.clone(), name)))
+    })
 }
 
 /// An item a decorated method declares — a guard it binds, a dependency it
@@ -162,7 +201,7 @@ pub(crate) fn cfg_attr_conditions(arguments: TokenStream) -> Option<TokenStream>
 }
 
 /// `tokens` split at each comma outside a group.
-fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
+pub(crate) fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
     let mut entries = vec![TokenStream::new()];
     for token in tokens {
         if matches!(&token, TokenTree::Punct(punct) if punct.as_char() == ',') {
@@ -369,8 +408,16 @@ mod tests {
         );
     }
 
+    fn described(method: &syn::ImplItemFn) -> Vec<String> {
+        field_attrs(&method.attrs, "graphql")
+            .expect("described")
+            .iter()
+            .map(|attr| quote!(#attr).to_string())
+            .collect()
+    }
+
     #[test]
-    fn a_cfg_inside_a_cfg_attr_is_unfolded_for_a_delegate() {
+    fn a_cfg_inside_a_cfg_attr_is_unfolded_for_a_field() {
         let method: syn::ImplItemFn = parse_quote! {
             #[doc = "a method"]
             #[cfg(feature = "x")]
@@ -378,20 +425,140 @@ mod tests {
             #[cfg_attr(a, cfg_attr(b, cfg(c)))]
             fn run(&self) {}
         };
-        let delegated: Vec<String> = delegated_attrs(&method.attrs)
-            .iter()
-            .map(|attr| quote!(#attr).to_string())
-            .collect();
         assert_eq!(
-            delegated,
+            described(&method),
             [
                 quote!(#[doc = "a method"]).to_string(),
                 quote!(#[cfg(feature = "x")]).to_string(),
                 quote!(#[cfg(any(not(all(test)), unix))]).to_string(),
-                quote!(#[cfg_attr(all(test), must_use)]).to_string(),
                 quote!(#[cfg(any(not(all(a, b)), c))]).to_string(),
             ]
         );
+    }
+
+    /// A field carries what the macro reading it reads and the allowances its
+    /// repeated signature needs: every other attribute is the method's alone,
+    /// whatever its name, plain or under a condition.
+    #[test]
+    fn a_field_is_described_by_its_helper_docs_conditions_and_allowances_alone() {
+        let method: syn::ImplItemFn = parse_quote! {
+            /// Read by the schema.
+            #[graphql(name = "run", complexity = 5)]
+            #[tracing::instrument(skip(self), err)]
+            #[resilient(upstream, idempotent)]
+            #[shielded(upstream)]
+            #[must_use]
+            #[deprecated = "use `walk`"]
+            #[inline]
+            #[deny(unused_must_use)]
+            #[warn(clippy::pedantic)]
+            #[forbid(unsafe_code)]
+            #[allow(unused_mut)]
+            #[cfg_attr(test, tracing::instrument(skip_all), resilient(upstream), deny(dead_code))]
+            #[cfg_attr(test, doc = "under test", allow(unused))]
+            #[cfg_attr]
+            #[cfg_attr()]
+            #[cfg_attr(, must_use)]
+            fn run(&self) {}
+        };
+        assert_eq!(
+            described(&method),
+            [
+                quote!(#[doc = r" Read by the schema."]).to_string(),
+                quote!(#[graphql(name = "run", complexity = 5)]).to_string(),
+                quote!(#[allow(unused_mut)]).to_string(),
+                quote!(#[cfg_attr(all(test), allow(unused))]).to_string(),
+            ]
+        );
+    }
+
+    /// An expectation is checked on the developer's method alone: its field
+    /// allows the same lints for the same reason, plain or under a condition.
+    #[test]
+    fn an_expectation_reaches_a_field_as_an_allowance() {
+        let method: syn::ImplItemFn = parse_quote! {
+            #[expect(unused_variables, reason = "read next release")]
+            #[cfg_attr(test, expect(clippy::too_many_arguments))]
+            #[cfg_attr(a, cfg_attr(b, expect(dead_code), cfg(c)))]
+            #[allow(unused_mut)]
+            fn run(&self, unread: u32) {}
+        };
+        assert_eq!(
+            described(&method),
+            [
+                quote!(#[allow(unused_variables, reason = "read next release")]).to_string(),
+                quote!(#[cfg_attr(all(test), allow(clippy::too_many_arguments))]).to_string(),
+                quote!(#[cfg_attr(all(a, b), allow(dead_code))]).to_string(),
+                quote!(#[cfg(any(not(all(a, b)), c))]).to_string(),
+                quote!(#[allow(unused_mut)]).to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_helper_inside_a_cfg_attr_is_refused_at_its_entry() {
+        for method in [
+            quote! {
+                #[cfg_attr(feature = "federated", graphql(shareable))]
+                fn run(&self) {}
+            },
+            quote! {
+                #[cfg_attr(a, must_use, cfg_attr(b, graphql(name = "run")))]
+                fn run(&self) {}
+            },
+        ] {
+            let method: syn::ImplItemFn = syn::parse2(method).expect("a method");
+            let refused = field_attrs(&method.attrs, "graphql")
+                .map(|_| ())
+                .expect_err("refused")
+                .to_string();
+            assert!(
+                refused
+                    .starts_with("`#[graphql(…)]` inside a `#[cfg_attr]` would be read by nothing"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_passed_through_a_macro_fragment_describes_the_field() {
+        let fragment = proc_macro2::Group::new(Delimiter::None, quote!(expect(dead_code)));
+        let method: syn::ImplItemFn = parse_quote! {
+            #[cfg_attr(all(), #fragment, must_use)]
+            fn run(&self) {}
+        };
+        assert_eq!(
+            described(&method),
+            [quote!(#[cfg_attr(all(all()), allow(dead_code))]).to_string()]
+        );
+    }
+
+    #[test]
+    fn an_attribute_is_found_written_plainly_or_under_any_condition() {
+        let written = |method: syn::ImplItemFn| is_written(&method.attrs, "deprecated");
+        assert!(written(parse_quote! {
+            #[deprecated]
+            fn run(&self) {}
+        }));
+        assert!(written(parse_quote! {
+            #[deprecated(since = "2.0.0", note = "use `walk`")]
+            fn run(&self) {}
+        }));
+        assert!(written(parse_quote! {
+            #[cfg_attr(feature = "next", must_use, deprecated = "use `walk`")]
+            fn run(&self) {}
+        }));
+        assert!(written(parse_quote! {
+            #[cfg_attr(a, cfg_attr(b, deprecated))]
+            fn run(&self) {}
+        }));
+        assert!(!written(parse_quote! {
+            #[cfg_attr(deprecated, must_use)]
+            #[doc = "deprecated"]
+            #[deprecated::audit(run)]
+            #[cfg_attr(a, deprecated::audit(run), allow(deprecated))]
+            fn run(&self) {}
+        }));
     }
 
     #[test]

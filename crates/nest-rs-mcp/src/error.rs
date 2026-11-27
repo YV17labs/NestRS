@@ -60,7 +60,7 @@ use std::future::Future;
 use nest_rs_core::__private::{
     RefusedAnswer, SaidFailure, Withheld, caught_problem, find_in_chain,
 };
-use nest_rs_core::{Code, DecodeError, Failure, Handler, Problem, ServedAddress, ToProblem, code};
+use nest_rs_core::{Code, Failure, Handler, Problem, ServedAddress, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
@@ -198,19 +198,13 @@ pub(crate) fn file(withheld: Withheld, at: ServedAddress<'_>) {
     }
 }
 
-/// Render a rejected pipe as an `invalid_params` the model can act on: its
-/// message, and in the error's `data` the `INVALID_ARGUMENT` code HTTP's `400`
-/// names for it, its field-level `errors` beside it when it has some; emitted
-/// by `#[tools]`, never written by hand.
+/// Render a rejected pipe as an `invalid_params` the model can act on, the
+/// problem it carries in MCP's form: its message, and in the error's `data`
+/// the `INVALID_ARGUMENT` code HTTP's `400` names for it, its field-level
+/// `errors` beside it when it has some; emitted by `#[tools]`, never written
+/// by hand.
 pub fn pipe_error(err: &PipeError) -> McpError {
-    McpError::invalid_params(
-        err.message().to_owned(),
-        ClassData {
-            errors: err.details(),
-            ..ClassData::of(code::INVALID_ARGUMENT)
-        }
-        .into_data(),
-    )
+    rendered(err.problem())
 }
 
 /// What an error's `data` carries, one shape whoever writes it: the class a
@@ -270,8 +264,9 @@ impl ClassData<'_> {
 
 /// Render what a [`ToProblem`] error says — a
 /// [`Problem`] among them — as the JSON-RPC error an MCP
-/// operation answers with: a `4xx` as `invalid_request`, a `5xx` as
-/// `internal_error`, the problem's
+/// operation answers with: the `INVALID_ARGUMENT` class as `invalid_params`,
+/// any other `4xx` as `invalid_request`, a `5xx` as `internal_error`, the
+/// problem's
 /// [`client_message`](nest_rs_core::Problem::client_message) as the message,
 /// and its code under `data` — with its RFC 9457 `type` and `title`, its wait
 /// as `retryAfterSeconds` and its field map as `errors` when it has them. An
@@ -335,6 +330,9 @@ fn rendered(problem: &Problem) -> McpError {
     .into_data();
     if problem.is_server_error() {
         McpError::internal_error(problem.client_message(), data)
+    } else if problem.code() == code::INVALID_ARGUMENT {
+        // JSON-RPC's own code for an argument refused, whoever refused it.
+        McpError::invalid_params(problem.client_message(), data)
     } else {
         McpError::invalid_request(problem.client_message(), data)
     }
@@ -372,22 +370,18 @@ pub(crate) fn invalid_argument(sentence: String) -> McpError {
 }
 
 /// The vocabulary `error`'s chain carries, else the opaque answer: the
-/// method's own error, a problem, a pipe's refusal or a decode failure,
-/// first found from the error itself down.
+/// method's own error or a problem — a pipe's refusal carries one — first
+/// found from the error itself down. A decode failure is neither: an
+/// upstream's answer or a stored value that did not decode is the server's
+/// failure.
 fn chain_error(error: &(dyn StdError + 'static)) -> McpError {
     if let Some(deliberate) = find_in_chain::<McpError>(error) {
         return deliberate.clone();
     }
-    if let Some(problem) = find_in_chain::<Problem>(error) {
-        return answered(problem, error);
+    match find_in_chain::<Problem>(error) {
+        Some(problem) => answered(problem, error),
+        None => opaque_error(error),
     }
-    if let Some(rejection) = find_in_chain::<PipeError>(error) {
-        return pipe_error(rejection);
-    }
-    if let Some(report) = DecodeError::in_chain(error) {
-        return invalid_argument(report.to_string());
-    }
-    opaque_error(error)
 }
 
 /// Why an operation's tail failed: the failure the pipeline carries, which
@@ -607,30 +601,35 @@ const PARSE_ERROR: &str = "Parse error";
 /// JSON-RPC 2.0's words for JSON that is no request object (§5.1).
 const INVALID_REQUEST: &str = "Invalid Request";
 
-/// How rmcp 3.11 opens its refusal of a body it cannot read as a JSON-RPC
-/// message, serde's error after it.
-const UNREAD_MESSAGE: &str = "fail to deserialize request body ";
+/// How rmcp opens the message of its parse error for a body that is not
+/// JSON, serde's error after it.
+const UNPARSED: &str = "Parse error: ";
 
-/// How rmcp words JSON that is none of a message's shapes: it reads every
-/// message through one untagged enum, so JSON of any other shape is said alike.
-const NO_MESSAGE_SHAPE: &str = "unrecognized JSON-RPC message";
+/// How rmcp opens the message of its invalid request for JSON that is no
+/// message, serde's error after it.
+const NO_MESSAGE: &str = "Invalid request: ";
 
 /// The JSON-RPC error answering a body rmcp's transport could not read as a
-/// message, when `text` is rmcp's refusal of one: JSON-RPC 2.0 §5.1's parse
-/// error for a body that is not JSON, its invalid request for JSON that is no
-/// message, each in its code's words under the `INVALID_ARGUMENT` class.
-pub(crate) fn unread_message(text: &str) -> Option<McpError> {
-    let decoded = text.strip_prefix(UNREAD_MESSAGE)?;
-    let (refused, said) = if decoded.starts_with(NO_MESSAGE_SHAPE) {
-        (ErrorCode::INVALID_REQUEST, INVALID_REQUEST)
-    } else {
-        (ErrorCode::PARSE_ERROR, PARSE_ERROR)
+/// message, when `refusal` is rmcp's JSON-RPC error refusing one: JSON-RPC
+/// 2.0 §5.1's parse error for a body that is not JSON, its invalid request
+/// for JSON that is no message, each in its code's words under the
+/// `INVALID_ARGUMENT` class. rmcp's message, serde's error, may quote the
+/// body, and the id it read off JSON that is no message may be one of two.
+pub(crate) fn unread_message(refusal: &[u8]) -> Option<McpError> {
+    let answer: serde_json::Value = serde_json::from_slice(refusal).ok()?;
+    let error: McpError = serde_json::from_value(answer.get("error")?.clone()).ok()?;
+    let (opens, said) = match error.code {
+        ErrorCode::PARSE_ERROR => (UNPARSED, PARSE_ERROR),
+        ErrorCode::INVALID_REQUEST => (NO_MESSAGE, INVALID_REQUEST),
+        _ => return None,
     };
-    Some(McpError::new(
-        refused,
-        said,
-        ClassData::of(code::INVALID_ARGUMENT).into_data(),
-    ))
+    error.message.starts_with(opens).then(|| {
+        McpError::new(
+            error.code,
+            said,
+            ClassData::of(code::INVALID_ARGUMENT).into_data(),
+        )
+    })
 }
 
 /// What a JSON-RPC error `code` says: JSON-RPC 2.0's words for its own codes
@@ -723,10 +722,10 @@ pub(crate) enum McpPostureError {
 /// MCP's words for a resource the server cannot read.
 const RESOURCE_NOT_FOUND: &str = "Resource not found";
 
-/// rmcp 3.11's answer to a session it does not hold, word for word.
+/// rmcp 3.12's answer to a session it does not hold, word for word.
 pub(crate) const SESSION_NOT_FOUND: &str = "Not Found: Session not found";
 
-/// rmcp 3.11's streamable-HTTP refusals written as text, word for word, that
+/// rmcp 3.12's streamable-HTTP refusals written as text, word for word, that
 /// quote nothing the request carried: what a client needs to fix its call.
 const TRANSPORT_SENTENCES: [&str; 14] = [
     "Not Acceptable: Client must accept both application/json and text/event-stream",
@@ -890,12 +889,12 @@ impl From<LocalSessionManagerError> for SessionsError {
     }
 }
 
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_session) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_session) }
 
 /// rmcp's session manager error said by its kind: its own sentence names the
 /// session a client named.
-fn say_session(link: &(dyn std::error::Error + 'static)) -> Option<String> {
-    let said = match link.downcast_ref::<LocalSessionManagerError>()? {
+fn say_session(refused: &LocalSessionManagerError) -> Option<String> {
+    let said = match refused {
         LocalSessionManagerError::SessionNotFound(_) => "session not found",
         LocalSessionManagerError::SessionError(error) => match error {
             SessionError::DuplicatedRequestId(_) => "a request id the session already holds",
@@ -1102,12 +1101,13 @@ mod tests {
     }
 
     /// rmcp's refusal of a body it cannot read as a message, as its
-    /// transport words it for each body, is read by the category serde gives
-    /// the failure: a syntax error is no JSON, any other is JSON of no
-    /// message's shape. Its sentence, which may quote the body, is never kept.
+    /// transport words it for each body — a parse error for a body that is
+    /// not JSON, an invalid request for any other — is said in its code's
+    /// words. Its sentence, which may quote the body, is never kept, nor is
+    /// any other refusal of those codes read as one.
     #[test]
     fn an_unread_message_is_said_by_the_category_of_its_failure() {
-        use rmcp::model::ClientJsonRpcMessage;
+        use rmcp::model::{ClientJsonRpcMessage, ErrorData, JsonRpcError};
 
         for body in [
             "{ not json",
@@ -1121,9 +1121,14 @@ mod tests {
         ] {
             let failed = serde_json::from_slice::<ClientJsonRpcMessage>(body.as_bytes())
                 .expect_err("no message");
-            let syntax = failed.classify() != serde_json::error::Category::Data;
-            let refused =
-                unread_message(&format!("{UNREAD_MESSAGE}{failed}")).expect("rmcp's refusal");
+            let syntax = serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err();
+            let said = if syntax {
+                ErrorData::parse_error(format!("{UNPARSED}{failed}"), None)
+            } else {
+                ErrorData::invalid_request(format!("{NO_MESSAGE}{failed}"), None)
+            };
+            let rmcps = serde_json::to_vec(&JsonRpcError::new(None, said)).expect("serialized");
+            let refused = unread_message(&rmcps).expect("rmcp's refusal");
             let (code, said) = if syntax {
                 (ErrorCode::PARSE_ERROR, PARSE_ERROR)
             } else {
@@ -1140,8 +1145,15 @@ mod tests {
                 "{body}",
             );
         }
+        for other in [
+            ErrorData::invalid_request("stateless server does not accept JSON-RPC responses", None),
+            ErrorData::invalid_params(format!("{NO_MESSAGE}marked"), None),
+        ] {
+            let rmcps = serde_json::to_vec(&JsonRpcError::new(None, other)).expect("serialized");
+            assert!(unread_message(&rmcps).is_none());
+        }
         assert!(
-            unread_message("Unsupported Media Type: Content-Type must be application/json")
+            unread_message(b"Unsupported Media Type: Content-Type must be application/json")
                 .is_none()
         );
     }
@@ -1306,6 +1318,32 @@ mod tests {
         assert!(!printed.contains("sk_live"), "{printed}");
     }
 
+    /// `std` makes a pointer to an error an error displaying the one it
+    /// holds: an error naming the session manager's as its source behind one
+    /// hands out the pointer, said as the error it holds.
+    #[test]
+    fn a_session_manager_error_named_as_a_source_behind_a_pointer_is_said_by_its_kind() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the session was lost")]
+        struct Naming<S: StdError + 'static>(#[source] S);
+
+        let named = || {
+            LocalSessionManagerError::SessionNotFound(
+                rmcp::transport::streamable_http_server::session::SessionId::from(
+                    "named-by-a-client",
+                ),
+            )
+        };
+        assert!(named().to_string().contains("named-by-a-client"));
+        for said in [
+            nest_rs_core::error_message(&Naming(named())),
+            nest_rs_core::error_message(&Naming(std::sync::Arc::new(named()))),
+            nest_rs_core::error_message(&Naming(Box::new(named()))),
+        ] {
+            assert_eq!(said, "the session was lost: session not found");
+        }
+    }
+
     /// What a domain answers when the ledger refuses; it says no problem.
     #[derive(Debug, thiserror::Error)]
     #[error("account 4111-1111 is frozen")]
@@ -1366,10 +1404,27 @@ mod tests {
             .into_answer();
         assert_eq!(piped.message, "must be a valid UUID");
         assert_eq!(piped.code, ErrorCode::INVALID_PARAMS);
+        let wrapped = nest_rs_core::anyhow::Error::from(PipeError::new("must be a valid UUID"))
+            .context("reading the cursor");
+        let wrapped = ErrorReport(wrapped).into_failure().into_answer();
+        assert_eq!(wrapped, piped, "found in a chain as the problem it carries");
 
-        let decode = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
-        let said = ErrorReport(decode).into_failure().into_answer();
-        assert!(!said.message.contains("sk_live"), "{}", said.message);
+        let decode = || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("no number");
+        let unread = ErrorReport(decode()).into_failure().into_answer();
+        assert_eq!(unread.message, OPAQUE);
+        assert_eq!(unread.code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            unread.data,
+            Some(serde_json::json!({ "code": "INTERNAL" })),
+            "a decode failure a chain holds is the server's, never the caller's",
+        );
+
+        let by_hand = Problem::from(nest_rs_core::DecodeError::from(decode()));
+        let said = ErrorReport(by_hand).into_failure().into_answer();
+        assert_eq!(
+            said.message,
+            "invalid type: a string, expected u64 at line 1 column 16"
+        );
         assert_eq!(said.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
             said.data,

@@ -673,9 +673,9 @@ mod tests {
         assert_eq!(err.to_string(), "authentication unavailable");
     }
 
-    /// A decode failure beneath the detail is the operator's: no edge reading
-    /// the chain for what to answer finds it, wrapped or not, and the line
-    /// says it without its value.
+    /// A decode failure beneath the detail is the operator's: an edge's search
+    /// for what to answer stops above it, wrapped or not, and the line says
+    /// it without its value.
     #[test]
     fn a_decode_failure_beneath_the_detail_is_never_the_callers() {
         let failure = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
@@ -684,7 +684,9 @@ mod tests {
             failure,
         ))
         .context("resolving the caller");
-        assert!(nest_rs_core::DecodeError::in_chain(err.as_ref()).is_none());
+        assert!(
+            nest_rs_core::__private::find_in_chain::<serde_json::Error>(err.as_ref()).is_none()
+        );
         let said = nest_rs_core::error_message(err.as_ref());
         assert!(said.contains("expected u64"), "{said}");
         assert!(!said.contains("sk_live"), "{said}");

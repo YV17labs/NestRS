@@ -88,7 +88,9 @@ capability is derived from the methods present, never written.
 - **What it answers is read by its type.** `Json<T>` is read as
   `application/json`, a `String` as `text/plain`, and a `ReadResourceResult`
   goes out as you built it, a blob included. Wrap any of them in `Option`:
-  `None` is a resource the caller may not read.
+  `None` is a resource the caller may not read. The answer's type is read
+  outside the method, so the answer borrows nothing of it: `Json<&'a str>`
+  borrowed through `&'a self` is rustc's `E0261`.
 - **A resource it cannot read is one answer.** A URI no template writes, a
   variable that does not parse and a `None` are all MCP's *Resource not
   found* — `-32002`, or `-32602` from protocol `2026-07-28` on — under the

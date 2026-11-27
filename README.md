@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>7.0 is the foundation the next versions build on</strong>: one way to declare each concern, one contract on every edge, a boot that refuses what would fail later — and no 7.x release breaks what you build on it. <a href="https://nestrs.dev/whats-new/">What's new in 7.0 →</a>
+  <strong>7.0 is the foundation the next versions build on</strong>: one way to declare each concern, one contract on every edge, a boot that refuses what would fail later — and no minor or patch breaks what you build on it. <a href="https://nestrs.dev/whats-new/">What's new in 7.0 →</a>
 </p>
 
 <p align="center">
@@ -121,14 +121,14 @@ off — a headless worker compiles no HTTP stack. Each has a reference section o
 | **Data** | SeaORM entities, `Repo`, ambient transactions, pagination, migrations, seeding · S3-compatible object storage |
 | **Security** | JWT on a shared secret, EdDSA keys or a JWK Set, OAuth 2.0 client with PKCE, token endpoint and protected resource metadata, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
 | **Background work** | Valkey-backed queues with retries, cron schedules that run on one replica when asked, a typed in-process event bus |
-| **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · resilience policies around your outbound calls — timeouts, retries, circuit breakers, bulkheads · OpenTelemetry logs, traces, metrics, your own `reqwest` client's calls included · `Server-Timing` |
+| **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · `#[resilient]` running a method calling a dependency under a named policy — timeouts, retries, circuit breakers, bulkheads, an outbound token bucket, a fallback, the answer classified, events and state readable in code · OpenTelemetry logs, traces, metrics, your own `reqwest` client's calls included · `Server-Timing` |
 | **Tooling** | The `nestrs` CLI — scaffold, generate a feature or an adapter, run, migrate · an in-process test harness booting the real DI graph |
 
 ## What holds it up
 
 Claims a clone of this repository lets you check:
 
-- **77 decorators**, one per integration contract, each expanding to plain Rust
+- **78 decorators**, one per integration contract, each expanding to plain Rust
   you can print with `cargo expand` — the index is on
   [nestrs.dev/decorators](https://nestrs.dev/decorators/).
 - **7,000+ tests** across the framework workspace, with the end-to-end suites
@@ -140,7 +140,7 @@ Claims a clone of this repository lets you check:
 
 ## Stability
 
-**NestRS is stable and ready for production.** No 7.x release breaks what you
+**NestRS is stable and ready for production.** No minor or patch breaks what you
 build on — your code, your configuration, the names your log filters and
 alerts match — and the [semver policy](https://nestrs.dev/semver/) says
 exactly what that covers. Every `nest-rs-*` crate publishes at the same version

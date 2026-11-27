@@ -177,38 +177,86 @@ pub fn within<F: Future>(
     // Not an `async fn`: its state would keep `call` beside the future built
     // from it.
     Within {
-        call: crate::panic::contain(call),
-        wait,
-        timer: None,
+        call,
+        wait: WithinHeld::new(wait, None),
     }
 }
 
 pin_project_lite::pin_project! {
-    /// What [`within`] returns: its timer is armed at the call's first
-    /// `Pending`.
+    /// What [`within`] returns.
     struct Within<C> {
         #[pin]
         call: C,
+        #[pin]
+        wait: WithinHeld,
+    }
+}
+
+impl<C: Future> Future for Within<C> {
+    type Output = Result<C::Output, Unanswered>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        this.wait.poll(this.call, cx)
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// [`within`]'s wait around a call its caller holds in place and polls
+    /// through it, ending at `until` when one is given rather than `wait` after
+    /// the call's first `Pending`: a wait read off a deadline that another timer
+    /// cuts at too ends with that timer, however long the call takes to first
+    /// wait. `wait` is what [`Unanswered::Elapsed`] says.
+    pub struct WithinHeld {
         wait: Duration,
+        until: Option<tokio::time::Instant>,
+        unwound: bool,
+        // Armed at the call's first `Pending`.
         #[pin]
         timer: Option<tokio::time::Sleep>,
     }
 }
 
-impl<C, T> Future for Within<C>
-where
-    C: Future<Output = Result<T, Box<dyn Any + Send>>>,
-{
-    type Output = Result<T, Unanswered>;
+impl WithinHeld {
+    /// The wait of `wait`, or until `until` when one is given.
+    pub const fn new(wait: Duration, until: Option<tokio::time::Instant>) -> Self {
+        Self {
+            wait,
+            until,
+            unwound: false,
+            timer: None,
+        }
+    }
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    /// The wait started afresh for the next call, of `wait` or until `until`,
+    /// the timer of the last one dropped.
+    #[inline]
+    pub fn reset(self: Pin<&mut Self>, wait: Duration, until: Option<tokio::time::Instant>) {
+        let mut this = self.project();
+        *this.wait = wait;
+        *this.until = until;
+        *this.unwound = false;
+        if this.timer.is_some() {
+            this.timer.set(None);
+        }
+    }
+
+    /// One poll of `call` within the wait: its answer, or why there is none.
+    pub fn poll<F: Future>(
+        self: Pin<&mut Self>,
+        call: Pin<&mut F>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<F::Output, Unanswered>> {
         let mut this = self.project();
         let had_budget = tokio::task::coop::has_budget_remaining();
-        if let Poll::Ready(answered) = this.call.poll(cx) {
+        if let Poll::Ready(answered) = crate::panic::poll_contained(call, this.unwound, cx) {
             return Poll::Ready(answered.map_err(Unanswered::Panicked));
         }
         if this.timer.is_none() {
-            this.timer.set(Some(tokio::time::sleep(*this.wait)));
+            this.timer.set(Some(match *this.until {
+                Some(until) => tokio::time::sleep_until(until),
+                None => tokio::time::sleep(*this.wait),
+            }));
         }
         let Some(timer) = this.timer.as_pin_mut() else {
             return Poll::Pending;
@@ -267,6 +315,74 @@ mod tests {
         })
         .await;
         assert!(matches!(answered, Ok("late but in time")), "{answered:?}");
+    }
+
+    /// A wait ending at an instant ends there, counting the time its call took
+    /// to first wait, where `within`'s counts from that first `Pending`.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_ending_at_an_instant_counts_the_time_its_call_took_to_first_wait() {
+        let slow_to_wait = || async {
+            tokio::time::advance(Duration::from_millis(3)).await;
+            std::future::pending::<()>().await
+        };
+        let sent = tokio::time::Instant::now();
+        let wait = Duration::from_secs(1);
+        let mut call = std::pin::pin!(slow_to_wait());
+        let mut held = std::pin::pin!(WithinHeld::new(wait, Some(sent + wait)));
+        let given_up = std::future::poll_fn(|cx| held.as_mut().poll(call.as_mut(), cx)).await;
+        assert!(
+            matches!(given_up, Err(Unanswered::Elapsed(said)) if said == wait),
+            "{given_up:?}"
+        );
+        assert_eq!(sent.elapsed(), wait);
+
+        let sent = tokio::time::Instant::now();
+        let given_up = within(wait, slow_to_wait()).await;
+        assert!(matches!(given_up, Err(Unanswered::Elapsed(_))));
+        assert_eq!(
+            sent.elapsed(),
+            wait + Duration::from_millis(3),
+            "`within` counts its wait from the call's first `Pending`"
+        );
+    }
+
+    /// A wait reset for its next call forgets the last one: the timer that call
+    /// armed, so the next gets its own full wait, and its unwind, so the next is
+    /// polled.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_reset_for_the_next_call_gives_it_its_full_wait_and_forgets_the_last_unwind() {
+        let mut held = std::pin::pin!(WithinHeld::new(Duration::from_secs(1), None));
+        let mut first = std::pin::pin!(std::future::pending::<()>());
+        let armed = std::future::poll_fn(|cx| {
+            Poll::Ready(held.as_mut().poll(first.as_mut(), cx).is_pending())
+        })
+        .await;
+        assert!(armed, "the first call waits, arming the timer");
+        tokio::time::advance(Duration::from_millis(900)).await;
+
+        let wait = Duration::from_secs(2);
+        held.as_mut().reset(wait, None);
+        let sent = tokio::time::Instant::now();
+        let mut second = std::pin::pin!(std::future::pending::<()>());
+        let given_up = std::future::poll_fn(|cx| held.as_mut().poll(second.as_mut(), cx)).await;
+        assert!(
+            matches!(given_up, Err(Unanswered::Elapsed(said)) if said == wait),
+            "{given_up:?}"
+        );
+        assert_eq!(
+            sent.elapsed(),
+            wait,
+            "the second call's own wait, not what was left of the first's"
+        );
+
+        held.as_mut().reset(wait, None);
+        let mut unwinding = std::pin::pin!(Unwinding);
+        let unwound = std::future::poll_fn(|cx| held.as_mut().poll(unwinding.as_mut(), cx)).await;
+        assert!(matches!(unwound, Err(Unanswered::Panicked(_))));
+        held.as_mut().reset(wait, None);
+        let mut answering = std::pin::pin!(async { 7 });
+        let answered = std::future::poll_fn(|cx| held.as_mut().poll(answering.as_mut(), cx)).await;
+        assert!(matches!(answered, Ok(7)), "{answered:?}");
     }
 
     /// One poll of `future`, answered whether or not it is ready.

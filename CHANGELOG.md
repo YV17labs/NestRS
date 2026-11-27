@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Line | Releases |
 |---|---|
-| [7.1](changelog/7.1.md) | Unreleased |
+| [Unreleased](changelog/unreleased.md) | — |
 | [7.0](changelog/7.0.md) | 7.0.0 — 2026-11-18 |
 | [6.1](changelog/6.1.md) | 6.1.0 — 2026-08-29 |
 | [6.0](changelog/6.0.md) | 6.0.0 — 2026-08-26 |

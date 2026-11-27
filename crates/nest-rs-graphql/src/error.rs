@@ -8,8 +8,7 @@
 //! 1. an `async_graphql::Error` — the edge's own deliberate error — as built;
 //! 2. a [`ToProblem`] error: the problem it says ([`problem_error`]), or opaque
 //!    when it says none;
-//! 3. framework vocabulary found in its chain: a [`Problem`], a [`PipeError`]
-//!    ([`pipe_error`]), a decode failure said without its value;
+//! 3. the [`Problem`] found in its chain, a [`PipeError`]'s among them;
 //! 4. anything else: [`OPAQUE_CLIENT_MESSAGE`] under the `INTERNAL` code, and
 //!    one `error` on `nest_rs::graphql` carrying the whole chain.
 //!
@@ -35,7 +34,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_graphql::{Error, ErrorExtensions, PathSegment, ServerError};
 use nest_rs_core::__private::{Withheld, caught_problem};
-use nest_rs_core::{DecodeError, Failure, Problem, ServedAddress, ToProblem, code};
+use nest_rs_core::{Failure, Problem, ServedAddress, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 
@@ -137,18 +136,12 @@ impl AnsweredError for ServerError {
     }
 }
 
-/// Render a [`PipeError`] as an `async_graphql::Error`: its message, the
-/// `INVALID_ARGUMENT` code HTTP's `400` names under `extensions.code`, and any
-/// structured field errors under `extensions.errors`.
+/// Render a [`PipeError`] as an `async_graphql::Error`, the problem it
+/// carries in GraphQL's form: its message, the `INVALID_ARGUMENT` code HTTP's
+/// `400` names under `extensions.code`, and any structured field errors under
+/// `extensions.errors`.
 pub fn pipe_error(err: &PipeError) -> Error {
-    // Absent, not null: a client branches on presence.
-    let details = err.details().and_then(field_map);
-    Error::new(err.message()).extend_with(move |_, e| {
-        e.set(CODE_EXTENSION, code::INVALID_ARGUMENT.as_str());
-        if let Some(details) = details {
-            e.set(FIELD_ERRORS_EXTENSION, details);
-        }
-    })
+    rendered(err.problem())
 }
 
 /// Render a guard's [`Denial`] as an `async_graphql::Error`: its message, its
@@ -264,21 +257,14 @@ fn file(withheld: Withheld, at: ServedAddress<'_>) {
     }
 }
 
-/// Tiers 3 and 4: the framework vocabulary `error`'s chain carries, else the
-/// opaque answer.
+/// Tiers 3 and 4: the problem `error`'s chain carries, else the opaque
+/// answer. A decode failure in a chain is no problem: an upstream's answer or
+/// a stored value that did not decode is the server's failure.
 fn chain_error(error: &(dyn StdError + 'static)) -> Reply {
-    use nest_rs_core::__private::find_in_chain;
-
-    if let Some(problem) = find_in_chain::<Problem>(error) {
-        return Reply::problem(problem, error, None);
+    match nest_rs_core::__private::find_in_chain::<Problem>(error) {
+        Some(problem) => Reply::problem(problem, error, None),
+        None => Reply::opaque(error),
     }
-    if let Some(rejection) = find_in_chain::<PipeError>(error) {
-        return Reply::said(pipe_error(rejection));
-    }
-    if let Some(report) = DecodeError::in_chain(error) {
-        return Reply::said(invalid_argument(report.to_string()));
-    }
-    Reply::opaque(error)
 }
 
 /// Why a field's tail failed: the failure the pipeline carries, which its
@@ -823,15 +809,35 @@ mod tests {
         assert_eq!(found.message, "not found");
         assert_eq!(extensions(&found)[CODE_EXTENSION], "NOT_FOUND");
 
-        let piped = ErrorReport(PipeError::new("must be a valid UUID"))
+        let piped = nest_rs_core::anyhow::Error::from(PipeError::new("must be a valid UUID"))
+            .context("reading the cursor");
+        let piped = ErrorReport(piped).into_failure().into_answer();
+        assert_eq!(piped.message, "must be a valid UUID");
+        assert_eq!(extensions(&piped)[CODE_EXTENSION], "INVALID_ARGUMENT");
+
+        let decode = || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("no number");
+        let unread = ErrorReport(decode()).into_failure().into_answer();
+        assert_eq!(unread.message, OPAQUE_CLIENT_MESSAGE);
+        assert_eq!(extensions(&unread)[CODE_EXTENSION], "INTERNAL");
+        assert!(
+            matches!(
+                kept(&unread),
+                Some(Withheld::Failed(said))
+                    if said == "invalid type: a string, expected u64 at line 1 column 16"
+            ),
+            "the server's failure, filed without the value",
+        );
+
+        let by_hand = Problem::from(nest_rs_core::DecodeError::from(decode()));
+        let said = ErrorReport(nest_rs_core::anyhow::Error::from(by_hand))
             .into_failure()
             .into_answer();
-        assert_eq!(piped.message, "must be a valid UUID");
-
-        let decode = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
-        let said = ErrorReport(decode).into_failure().into_answer();
-        assert!(!said.message.contains("sk_live"), "{}", said.message);
+        assert_eq!(
+            said.message,
+            "invalid type: a string, expected u64 at line 1 column 16"
+        );
         assert_eq!(extensions(&said)[CODE_EXTENSION], "INVALID_ARGUMENT");
+        assert_eq!(kept(&said), None, "a refusal withholds nothing");
 
         let secret = ErrorReport(std::io::Error::other("secret 42"))
             .into_failure()

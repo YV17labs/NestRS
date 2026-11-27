@@ -1,0 +1,217 @@
+---
+title: Upgrading to the unreleased changes
+description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver, a route's posture, an HTTP error's detail, a 503 tick's level, a default Redis instance's lines — and what fails when a step is missed."
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+The changes not yet released make a major: they take the designs the
+published release's compatibility held back, whatever they break. An attribute
+on a GraphQL operation applies to the method you wrote, a `Problem` is the one thing an edge reads in a handler's error, a
+`SafeLink` names the type it says, a data driver says what each handle holds,
+only a route's decorator opens its reads, an HTTP reply's `detail` is a
+sentence written for the client, a tick or listener failing with a `503`
+is filed at `warn`, and a Redis line of the default instance names none.
+This page is the order to take the changes in; the
+[changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/unreleased.md) says
+why each was made. The release holding them is numbered when it is cut, and
+this page holds its breaks so far.
+
+You need the project building on the published release. Most steps are
+compile errors, so the compiler finds every site; a step that changes behaviour alone says so, and
+[What fails if you get it wrong](#what-fails-if-you-get-it-wrong) lists what the
+boot, a log or the wire shows when one is missed. An app on SeaORM with no
+`SafeLink` of its own takes steps 1 to 3, then reads steps 6 to 8: step 6 is a
+compile error only where a route read through one of the types it names, and
+steps 7 and 8 change behaviour alone, so no compiler sends you back to them; an
+app on Redis reads step 9 too, which changes behaviour alone.
+
+<Steps>
+
+1. **Move the manifest.** In the root `Cargo.toml`, the `nest-rs` requirement
+   under `[workspace.dependencies]` moves from the published major to the one
+   holding these changes, at the number its changelog gives when it is cut; the
+   features you list stay as they are.
+
+   The umbrella's `full` now takes `resilience`, so an app on `full` declaring a
+   `#[config]` of its own in the `resilience` namespace fails its boot, its type
+   and the framework's both claiming it: give yours another `namespace`, or list
+   the features you use in place of `full`. A module of a named instance is
+   written as its type, `RedisModule<Cache>`: `RedisModule::<Cache>`, the
+   spelling the published release taught, is refused at its `::`, naming the
+   type to write.
+
+2. **Read each attribute on a GraphQL operation as the method's.**
+   `#[operations]` takes off a method only what it consumes — its role, its
+   posture, its layers, `#[meta]` and async-graphql's `#[graphql(…)]` — and
+   leaves every other attribute on the method you wrote, as a route's handler
+   does ([Attributes on an operation](/graphql/queries-mutations/#attributes-on-an-operation)):
+
+   | On an operation before | Now |
+   |---|---|
+   | `#[tracing::instrument]` naming the field's parameters, spanning the guards and the pipes | it spans the method's body, after the guards, the gate and the pipes, which the request's `graphql.field` span covers; skip the method's own parameters with no `Debug` — `skip_all`, or its `Scoped<T>`, `Piped<P>` and `&Context` by name — and its `err` records the method's own error |
+   | Rust's `#[deprecated]` | `#[graphql(deprecation = "…")]`, which the schema and its introspection show |
+   | `#[graphql(…)]` inside a `#[cfg_attr]` | written plain, the condition on the method as a `#[cfg]` |
+   | a `deny` or `warn` lint level, plain or under a `#[cfg_attr]`, which held the field | it holds the method's body, so a lint it denies there fails the build |
+
+   `cargo check` then compiles every operation, an instrument reading the
+   method's own `self` included.
+
+3. **Say which decode failures are your client's.** A handler whose error
+   chain holds a serde error now answers `INTERNAL`, its chain filed at
+   `error`, on every edge: GraphQL, WebSocket and MCP answered
+   `INVALID_ARGUMENT` and filed nothing, so a partner's answer that did not
+   decode was blamed on the client. A handler decoding its client's own text
+   says so where it decodes,
+   `serde_json::from_str(&text).map_err(|e| Problem::from(DecodeError::from(e)))?`,
+   which answers `400` under `INVALID_ARGUMENT` without the value.
+   `DecodeError::in_chain` is gone. The rest of this step changes behaviour
+   alone:
+
+   - a `PipeError` a handler returns, bare or wrapped in its own error,
+     answers `400` `INVALID_ARGUMENT` on HTTP too, where an `anyhow` handler
+     answered `500`;
+   - a queue job whose method returns a `PipeError` dead-letters at its first
+     attempt, as any client error does, where it was retried within its budget;
+   - an exception filter on `Problem` catches a pipe's refusal it finds in a
+     chain — a per-argument one on GraphQL and MCP, a global data pipe's on
+     WebSocket — which the edge answered itself;
+   - an HTTP interceptor failing with the framework's `DecodeError` — a
+     `QueueError::Serialize` — answers `500`, where it answered `400`;
+   - on MCP, a `Problem` under `INVALID_ARGUMENT`, a `422` included, answers
+     `invalid_params` (`-32602`), where it answered `invalid_request`
+     (`-32600`).
+
+   A test asserting `INVALID_ARGUMENT` for an upstream's unreadable answer
+   now reads `INTERNAL`.
+
+4. **Name the type a `SafeLink` says.** `SafeLink::new(say)` over
+   `fn(&dyn Error) -> Option<String>` is gone: a sayer takes its own type,
+   `fn say(error: &AcmeError) -> Option<String>`, and is submitted by
+   reference, `nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say) }`
+   — one entry per type, with no downcast and no `link_as`, since the
+   framework reads your type behind every pointer for you
+   ([Binding a database driver](/database/binding-a-driver/#when-the-backend-fails)).
+   A type has one sayer: an app that submitted its own over `reqwest::Error`
+   drops it, or claims an error type of its own holding reqwest's as its
+   `#[source]`.
+
+5. **A data driver of your own answers what each handle holds.**
+   `nest_rs::database::Executor` is one method, `holds()`: `Holds::Pool` over a
+   type implementing `HeldPool`, or `Holds::Transaction` over one implementing
+   `HeldTransaction`, every method required
+   ([Writing a database driver](/database/writing-a-driver/#the-executor)):
+
+   | The published `Executor` | Now |
+   |---|---|
+   | `as_any` | `executor.holds().downcast_ref::<T>()`, through every wrapper |
+   | `after_commit(work) -> Option<Deferred>` | `HeldTransaction::after_commit(work)`, which holds the work; on the pool the port runs it at once |
+   | `atomic` | `HeldPool::transaction` and `HeldTransaction::savepoint`, which a resilience policy's attempt runs in too |
+   | `write_outbox` | `Outbox::write`, the outbox `HeldTransaction::outbox` answers |
+   | `remove_outbox`, `remove_outbox_unique` | `OutboxKept::remove`, `remove_unique`, on what either handle's `outbox` answers |
+   | `non_transactional` | nothing: a subscription socket, like every continuation, runs on a pool unit of your binding |
+
+   An app changes nothing here: `atomic`, `after_commit`, `Jobs::push` and
+   `cancel`, `#[resilient]` and `Repo` keep their signatures.
+
+6. **Declare a route's reads with its posture.** No parameter's type opens a
+   route's reads any more: `nest_rs::http::RouteResponseShaper`,
+   `ResponseShaping`, `RouteFuture`, `ShapedEndpoint` and
+   `nest_rs::authz::http::Authorize` are gone. A route that read scoped rows
+   because a parameter's type implemented `RouteResponseShaper` now reads
+   withheld until it declares `#[authorize(Action, Subject)]`, or
+   `#[public(Action, Subject)]` where a caller with no credential is admitted;
+   code that shaped a response through the trait moves to an
+   [interceptor](/fundamentals/interceptors/).
+
+7. **Write the sentence a client reads.** An error's `Display` is no longer an
+   HTTP reply's `detail`: `HttpError::new(e, status)` answers `status`'s
+   problem with no `detail`, whatever the status, and so does a
+   `ResponseError` that writes no `as_response`. `ProblemDetails::from_error`
+   is gone ([HTTP errors](/http/errors/)):
+
+   | Before | Now |
+   |---|---|
+   | `HttpError::new(e, StatusCode::BAD_REQUEST)` for `e`'s sentence | `Problem::new(400, code::INVALID_ARGUMENT).with_detail("…")`, in words of your own |
+   | `HttpError::new(serde_err, StatusCode::BAD_REQUEST)` for a decode of the client's text | `Problem::from(DecodeError::from(serde_err))` |
+   | `ProblemDetails::from_error(status, title, &err)` | `ProblemDetails::from_problem(&problem)`, or `ProblemDetails::from_status(status).with_detail("…")` |
+   | `impl ResponseError` with no `as_response`, its `Display` the client's | `impl ToProblem`, its `Problem` carrying the sentence |
+
+   This step changes behaviour alone: status, `title` and `code` are unchanged.
+   Behind a `5xx` the edge files the cause for the operator, at `error` (`warn`
+   behind a `503`). Behind a `4xx` nothing files it and only an [exception
+   filter](/fundamentals/exception-filters/) reads it: a reason the operator
+   needs there is a line the handler writes, and one the client needs is its
+   `with_detail`.
+
+8. **Move an alert on a `503` tick or listener to `warn`.** A scheduled job or
+   an event listener failing with a `503` — a resilience policy's refusal, a
+   filter's, any `Problem` its error's chain carries — is filed at `warn` as
+   `scheduled job failed; unavailable` or `event listener failed; unavailable —
+   dispatch continues with the next listener`, where it was `scheduled job
+   failed` or `event listener failed — dispatch continues with the next
+   listener` at `error`. A `503` an error states through `ToProblem` alone — a
+   `ServiceError` for a statement cancelled at its bound — is read by neither
+   edge, and stays at `error` unless a filter answers it. This step changes
+   behaviour alone: a log filter or an alert reading the old level or message
+   reads the new pair.
+
+9. **Match the default Redis instance by its field's absence.** A line on
+   `nest_rs::redis` of the default instance carries no `instance`, where it
+   carried `instance = ""`; a named instance's still says it,
+   `instance = "cache"`. This step changes behaviour alone: a log filter, a
+   query or an alert matching `instance=""` matches a line with no `instance`.
+
+</Steps>
+
+## What fails if you get it wrong
+
+- **A data driver's handle that does not say what it holds** does not compile:
+  `E0046` names `holds`, and a `HeldPool` or `HeldTransaction` leaving out a
+  method names that one.
+- **`SafeLink::new`** is rustc's `E0599`, a function `SafeLink` no longer has, and a
+  sayer over `&dyn Error` is `E0277` at `SafeLink::of`.
+- **Two sayers of one error type** refuse the boot, naming the type and both
+  functions: `contested safe link: … is claimed by two sayers`.
+- **Rust's `#[deprecated]` on an operation** is refused where it is written,
+  as Rust code whose only caller is the framework, the error naming
+  `#[graphql(deprecation = "…")]`. So is a `#[graphql(…)]` inside a
+  `#[cfg_attr]`, which no macro would read.
+- **An instrument on an operation naming a parameter with no `Debug`** is
+  rustc's `E0277` at that parameter.
+- **A `#[config]` of your own in the `resilience` namespace, on `full`**,
+  refuses the boot, naming the namespace and both types that declare it
+  (`ConfigError::SharedNamespace`).
+- **A client branching on `INVALID_ARGUMENT` for an upstream's unreadable
+  answer** reads `INTERNAL`, and the operator's log gains its chain at `error`;
+  **an MCP client reading `-32600`** for an argument refused reads `-32602`.
+
+- **A parameter whose type implemented `RouteResponseShaper`** is rustc's
+  `E0405` at the `impl`, and the route it sat on reads withheld:
+  `current_ability()` answers `None` in its handler.
+- **A client reading an HTTP `4xx`'s `detail` built from an error** finds none.
+- **An alert on `scheduled job failed` or `event listener failed` at `error`**
+  stays silent while a dependency refuses with a `503`: those occurrences are
+  filed at `warn`, under the `; unavailable` pair.
+- **A filter on `instance=""` over `nest_rs::redis`** matches nothing: the
+  default instance's lines carry no `instance`.
+
+## Reference
+
+- `crates/nest-rs-testing/tests/integration/chain_answers.rs` — one chain
+  answered on the four edges: an upstream's unreadable answer, a handler's own
+  decode, a pipe's refusal.
+- `crates/nest-rs-database/src/executor.rs` — the driver's contract, and the
+  `compile_fail` examples of a handle that leaves a method out.
+- `crates/nest-rs-macro-hygiene/tests/integration/diagnostics/graphql/` —
+  `deprecated_on_an_operation` and `lint_levels_on_an_operation`, worded as the
+  compiler prints them.
+
+## Going further
+
+- [Unreleased changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/unreleased.md)
+  — why each change was made.
+- [GraphQL errors](/graphql/errors/) — which error answers which envelope.
+- [Writing a database driver](/database/writing-a-driver/) — the contract a
+  driver implements, on SeaORM's code.
+- [Semver policy](/semver/) — what a release number promises.

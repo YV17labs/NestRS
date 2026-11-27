@@ -1,18 +1,15 @@
 //! A unit's events name its edge (`http`, `ws`, `queue`, …) in `transport`, as
 //! every other framework event does; a unit no edge dispatches is named in full.
 
-use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use nest_rs_core::{Continuation, TaskContext, Unanswered, within};
 use nest_rs_database::{
-    AtomicBlock, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork,
-    UnitSpec,
+    ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
 };
 use sea_orm::{DatabaseConnection, DbErr};
 use tokio::sync::oneshot;
@@ -21,8 +18,7 @@ use tokio::time::Instant;
 use tokio_util::task::TaskTracker;
 
 use crate::SeaOrmConfig;
-use crate::atomic::{AtomicExecutor, PoolCommit};
-use crate::executor::{FinalizeOutcome, Installed, LazyTransaction, SeaOrmExecutor};
+use crate::executor::{FinalizeOutcome, InstalledPool, InstalledTransaction, LazyTransaction};
 #[cfg(any(feature = "http", feature = "graphql"))]
 use crate::unique_key::UniqueKeys;
 
@@ -50,8 +46,6 @@ const UNSUPPORTED_POLICY: &str = "this driver does not support the unit's transa
 /// its units through it.
 pub struct SeaOrmUnitOfWork {
     db: DatabaseConnection,
-    /// The handle every pool unit installs, shared.
-    pool: Arc<Installed>,
     observe_conflicts: bool,
     settle_net: Duration,
     settles: Settles,
@@ -80,10 +74,8 @@ impl SeaOrmUnitOfWork {
         config: &SeaOrmConfig,
         settles: Settles,
     ) -> Self {
-        let db = (*db).clone();
         Self {
-            pool: Arc::new(Installed(SeaOrmExecutor::Pool(db.clone()))),
-            db,
+            db: (*db).clone(),
             observe_conflicts: config.observe_serialization_conflicts,
             settle_net: settle_net(config),
             settles,
@@ -122,6 +114,15 @@ impl SeaOrmUnitOfWork {
         let lazy = lazy.keeping(self.outbox.clone());
         lazy
     }
+
+    /// The pool as a unit installs it: an atomic block there is a transaction
+    /// of its own, committed on the binding's settle task.
+    fn pool(&self) -> InstalledPool {
+        let pool = InstalledPool::new(self.db.clone()).settling_on(self.settles.clone());
+        #[cfg(feature = "queue")]
+        let pool = pool.keeping(self.outbox.clone());
+        pool
+    }
 }
 
 /// The settle net: what Postgres holds a statement to, `COMMIT` included,
@@ -138,13 +139,7 @@ impl UnitOfWork for SeaOrmUnitOfWork {
             .map_or(spec.unit.name(), nest_rs_core::Edge::as_str);
         match spec.policy {
             TransactionPolicy::Pool => Ok(Box::new(OnPool {
-                unit: Arc::new(PoolUnit {
-                    pool: Arc::clone(&self.pool),
-                    settles: self.settles.clone(),
-                    unseen: OnceLock::new(),
-                    #[cfg(feature = "queue")]
-                    outbox: self.outbox.clone(),
-                }),
+                pool: Arc::new(self.pool()),
                 transport,
             })),
             TransactionPolicy::PerUnit => Ok(Box::new(InTransaction {
@@ -189,17 +184,17 @@ impl Settles {
 /// A unit on the pool: each statement commits on its own, and nothing settles
 /// but a failure cut while an atomic block's own commit ran.
 struct OnPool {
-    unit: Arc<PoolUnit>,
+    pool: Arc<InstalledPool>,
     transport: &'static str,
 }
 
 impl OpenUnit for OnPool {
     fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
-        Arc::clone(&self.unit) as Arc<dyn nest_rs_database::Executor>
+        Arc::clone(&self.pool) as Arc<dyn nest_rs_database::Executor>
     }
 
     fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
-        if !ok && self.unit.cut_mid_commit() {
+        if !ok && self.pool.cut_mid_commit() {
             tracing::error!(
                 target: crate::target::ORM,
                 transport = self.transport,
@@ -211,81 +206,6 @@ impl OpenUnit for OnPool {
             )));
         }
         Box::pin(Settled)
-    }
-}
-
-/// The handle a pool unit installs: the pool, on which an atomic block is a
-/// transaction of its own committed on the binding's settle task.
-pub(crate) struct PoolUnit {
-    pool: Arc<Installed>,
-    settles: Settles,
-    /// The commits of the blocks the body opened whose answer it has not seen;
-    /// allocated by the first block.
-    unseen: OnceLock<Arc<AtomicUsize>>,
-    /// The outbox a block of its own writes a push's jobs into; a push on the
-    /// pool itself is filed at once.
-    #[cfg(feature = "queue")]
-    outbox: Option<Arc<crate::queue::SeaOrmOutbox>>,
-}
-
-impl PoolUnit {
-    /// Whether the body ended before seeing a block's commit answer.
-    fn cut_mid_commit(&self) -> bool {
-        self.unseen
-            .get()
-            .is_some_and(|unseen| unseen.load(Ordering::Relaxed) > 0)
-    }
-
-    /// The outbox a cancel on the pool deletes a kept record from: the
-    /// binding's, armed by a relay.
-    #[cfg(feature = "queue")]
-    fn outbox(&self) -> Option<&Arc<crate::queue::SeaOrmOutbox>> {
-        self.outbox.as_ref().filter(|outbox| outbox.is_armed())
-    }
-}
-
-impl nest_rs_database::Executor for PoolUnit {
-    fn as_any(&self) -> &dyn Any {
-        &*self.pool
-    }
-
-    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        let own = self.pool.0.own_block()?;
-        #[cfg(feature = "queue")]
-        let own = own.keeping(self.outbox.clone());
-        let unseen = Arc::clone(self.unseen.get_or_init(Arc::default));
-        Some(Arc::new(AtomicExecutor::own_on_pool(
-            Arc::new(own),
-            PoolCommit::new(self.settles.clone(), unseen),
-        )))
-    }
-
-    /// A record committed by an earlier unit and not yet filed is deleted on
-    /// the pool, outside every transaction.
-    #[cfg(feature = "queue")]
-    fn remove_outbox<'a>(
-        &'a self,
-        queue: &'a str,
-        id: uuid::Uuid,
-    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
-    {
-        let outbox = self.outbox()?;
-        Some(Box::pin(
-            outbox.remove_on_pool(crate::queue::removal_of_job(queue, id)),
-        ))
-    }
-
-    #[cfg(feature = "queue")]
-    fn remove_outbox_unique<'a>(
-        &'a self,
-        queue: &'a str,
-        key: &'a str,
-    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
-    {
-        let outbox = self.outbox()?;
-        Some(Box::pin(
-            outbox.remove_on_pool(crate::queue::removal_of_key(queue, key)),
-        ))
     }
 }
 
@@ -312,7 +232,7 @@ struct InTransaction {
 
 impl OpenUnit for InTransaction {
     fn executor(&self) -> Arc<dyn nest_rs_database::Executor> {
-        SeaOrmExecutor::Lazy(Arc::clone(&self.lazy)).into()
+        Arc::new(InstalledTransaction::Lazy(Arc::clone(&self.lazy)))
     }
 
     fn settle(self: Box<Self>, ok: bool) -> Pin<Box<dyn Future<Output = Settlement> + Send>> {
@@ -476,6 +396,7 @@ mod tests {
     use nest_rs_core::operation_log::Kind;
 
     use super::*;
+    use crate::executor::{SeaOrmExecutor, installed};
 
     const MESSAGE: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
         "nest-rs-ws",
@@ -497,18 +418,18 @@ mod tests {
             .unwrap_or_else(|why| panic!("SeaORM opens every policy it knows: {why}"))
     }
 
-    fn seaorm(executor: &Arc<dyn nest_rs_database::Executor>) -> &SeaOrmExecutor {
-        Installed::of(&**executor).expect("the unit installs a SeaORM executor")
+    fn seaorm(executor: &dyn nest_rs_database::Executor) -> SeaOrmExecutor {
+        installed(executor).expect("the unit installs a SeaORM executor")
     }
 
     #[test]
     fn a_pool_unit_runs_on_the_pool_and_a_unit_of_its_own_in_a_lazy_transaction() {
         assert!(matches!(
-            seaorm(&opened(TransactionPolicy::Pool).executor()),
+            seaorm(&*opened(TransactionPolicy::Pool).executor()),
             SeaOrmExecutor::Pool(_)
         ));
         let executor = opened(TransactionPolicy::PerUnit).executor();
-        let SeaOrmExecutor::Lazy(lazy) = seaorm(&executor) else {
+        let SeaOrmExecutor::Lazy(lazy) = seaorm(&*executor) else {
             panic!("a unit of its own runs in a lazy transaction");
         };
         assert!(!lazy.is_opened(), "opening a unit sends nothing");
@@ -539,24 +460,17 @@ mod tests {
             (Some(1), true, Settlement::Settled),
             (Some(1), false, Settlement::Unhonoured(Unhonoured::IN_DOUBT)),
         ] {
-            let unit = Arc::new(PoolUnit {
-                pool: Arc::new(Installed(SeaOrmExecutor::Pool(
-                    DatabaseConnection::default(),
-                ))),
-                settles: Settles::default(),
-                unseen: OnceLock::new(),
-                #[cfg(feature = "queue")]
-                outbox: None,
-            });
+            let pool = Arc::new(
+                InstalledPool::new(DatabaseConnection::default()).settling_on(Settles::default()),
+            );
             if let Some(unseen) = blocks_unseen {
-                let block = nest_rs_database::Executor::atomic(&*unit)
-                    .expect("a pool unit offers a block of its own");
-                assert!(matches!(seaorm(&(block as _)), SeaOrmExecutor::Lazy(_)));
-                let count = unit.unseen.get().expect("the block counts its commit");
-                count.fetch_add(unseen, Ordering::Relaxed);
+                let block = nest_rs_database::HeldPool::transaction(&*pool);
+                assert!(matches!(seaorm(&*block), SeaOrmExecutor::Lazy(_)));
+                let count = pool.unseen().expect("the block counts its commit");
+                count.fetch_add(unseen, std::sync::atomic::Ordering::Relaxed);
             }
             let open = Box::new(OnPool {
-                unit,
+                pool,
                 transport: "queue",
             });
             assert_eq!(
@@ -708,64 +622,46 @@ mod tests {
         assert!(ended.load(std::sync::atomic::Ordering::SeqCst));
     }
 
+    /// Whether a push on the handle a unit of `unit_of_work` installs under
+    /// `policy` is written into an outbox, and whether a cancel there reaches
+    /// one.
+    #[cfg(feature = "queue")]
+    fn keeps(unit_of_work: &SeaOrmUnitOfWork, policy: TransactionPolicy) -> (bool, bool) {
+        let open = unit_of_work
+            .open(&UnitSpec::new(MESSAGE, ExecutorScope::Request, policy))
+            .expect("opened");
+        match open.executor().holds() {
+            nest_rs_database::Holds::Pool(pool) => (false, pool.outbox().is_some()),
+            nest_rs_database::Holds::Transaction(held) => {
+                (held.outbox().is_some(), held.outbox().is_some())
+            }
+        }
+    }
+
     #[cfg(feature = "queue")]
     #[test]
     fn a_units_transaction_keeps_jobs_once_a_relay_armed_its_outbox_and_a_pool_never() {
-        let record = || {
-            std::iter::once(nest_rs_database::OutboxRecord::new(
-                "notify",
-                uuid::Uuid::nil(),
-                "{}".to_owned(),
-                None,
-                Duration::ZERO,
-            ))
-        };
-        let unread = || {
-            std::iter::from_fn(|| -> Option<nest_rs_database::OutboxRecord> {
-                panic!("a handle keeping no outbox builds no record")
-            })
-        };
         let unarmed = Arc::new(crate::queue::SeaOrmOutbox::new(
             DatabaseConnection::default(),
         ));
         let unit_of_work = unit_of_work().keeping(Some(unarmed));
-        let open = unit_of_work
-            .open(&UnitSpec::new(
-                MESSAGE,
-                ExecutorScope::Request,
-                TransactionPolicy::PerUnit,
-            ))
-            .expect("opened");
-        assert!(
-            open.executor().write_outbox(&mut unread()).is_none(),
-            "no relay drains it: filed at once"
-        );
+        for policy in [TransactionPolicy::PerUnit, TransactionPolicy::Pool] {
+            assert_eq!(
+                keeps(&unit_of_work, policy),
+                (false, false),
+                "no relay drains it: filed at once, {policy:?}"
+            );
+        }
 
         let unit_of_work = unit_of_work.keeping(Some(crate::queue::armed()));
-        let open = unit_of_work
-            .open(&UnitSpec::new(
-                MESSAGE,
-                ExecutorScope::Request,
-                TransactionPolicy::PerUnit,
-            ))
-            .expect("opened");
-        assert!(open.executor().write_outbox(&mut record()).is_some());
-        let open = unit_of_work
-            .open(&UnitSpec::new(
-                MESSAGE,
-                ExecutorScope::Request,
-                TransactionPolicy::Pool,
-            ))
-            .expect("opened");
-        assert!(
-            open.executor().write_outbox(&mut unread()).is_none(),
-            "a pool files at once"
+        assert_eq!(
+            keeps(&unit_of_work, TransactionPolicy::PerUnit),
+            (true, true)
         );
-        let caller: Arc<dyn nest_rs_database::Executor> =
-            SeaOrmExecutor::Pool(DatabaseConnection::default()).into();
-        assert!(
-            caller.write_outbox(&mut unread()).is_none(),
-            "a handle the caller built keeps no outbox"
+        assert_eq!(
+            keeps(&unit_of_work, TransactionPolicy::Pool),
+            (false, true),
+            "a pool files at once, and a cancel there reaches a kept record"
         );
     }
 

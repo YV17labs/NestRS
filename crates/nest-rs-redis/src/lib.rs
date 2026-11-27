@@ -33,7 +33,7 @@
 //! provides `RedisConnection<Cache>`, and a binding over a named instance is a
 //! typed import too, `RedisScheduleModule<Locks>`. Every refusal names the
 //! failing instance's variables, and every line the connection files carries
-//! it as `instance`.
+//! it as `instance`, which the default instance's leave out.
 //!
 //! The connection attaches no close to the app's way down: a Valkey or Redis
 //! connection owes its server no goodbye — `QUIT` is deprecated since Redis

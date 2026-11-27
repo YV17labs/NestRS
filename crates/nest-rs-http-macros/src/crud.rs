@@ -72,9 +72,6 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         ),
     };
 
-    // The parameters generated here declare neither a gate nor a shaper.
-    let unprobed = proc_macro2::Ident::new(crate::routes::UNPROBED, proc_macro2::Span::call_site());
-
     let mut generated: Vec<ImplItem> = Vec::new();
 
     if ops.list {
@@ -101,7 +98,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    #[#unprobed] __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
+                    __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
                 ) -> ::nest_rs_http::Result<
                     ::nest_rs_http::Paginated<::nest_rs_http::Json<::std::vec::Vec<#output>>>,
                 > {
@@ -138,7 +135,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Read, #entity)]
             async fn get(
                 &self,
-                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
@@ -167,7 +164,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Create, #entity)]
             async fn create(
                 &self,
-                #[#unprobed] __body: ::nest_rs_http::Json<#create>,
+                __body: ::nest_rs_http::Json<#create>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Created<::nest_rs_http::Json<#output>>> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
                     #service(self),
@@ -196,8 +193,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Update, #entity)]
             async fn update(
                 &self,
-                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
-                #[#unprobed] __body: ::nest_rs_http::Json<#update>,
+                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                __body: ::nest_rs_http::Json<#update>,
             ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
@@ -237,7 +234,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[authorize(::nest_rs_authz::Delete, #entity)]
             async fn delete(
                 &self,
-                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
             ) -> ::nest_rs_http::Result<()> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(

@@ -104,7 +104,8 @@ Forgetting the bus is a boot error naming it, not a silent subscription.
 The stream reaches this process, and a reader far behind loses the oldest events:
 [Event streams](/events/streams/) has what it promises.
 A source of your own — a broker's consumer, a channel — is any
-`impl Stream<Item = T>`, gated and judged the same way.
+`impl Stream<Item = T>` or a stream a type names (`BoxStream<'static, T>`), under
+any posture, gated and judged the same way.
 
 Note what the event carries: the **published row**, not its id and not its wire
 type. An item is pushed, not read through `Repo`, and its judgement decides on the
@@ -136,6 +137,10 @@ upgrade, and the bounds it holds.
   is a compile error naming the rule, at the return type. A query or a mutation
   answers such a `Result` by its type; a subscription cannot. The method may be
   `fn` or `async fn`.
+- **A stream's item borrows nothing of the method.** The stream may borrow
+  through a lifetime the method declares — `impl Stream<Item = String> + 'a`
+  from `&'a self` — but async-graphql reads its item's type outside the method,
+  where `'a` is undeclared: `Item = &'a str` is rustc's `E0261`.
 - **An item a refusal makes is dropped, not raised.** A stream field's type is
   the item's, not a `Result`, so there is no error channel per item: failing
   closed means the item does not ship. A refusal the subscriber's grants make is

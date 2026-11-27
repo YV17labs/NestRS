@@ -1,0 +1,7 @@
+error: #[resilient] decorates an `async fn` method with a body, run under the policy a field of `self` holds, and this is no method — put it on the method making the call
+  --> tests/integration/diagnostics/resilience/resilient_on_a_struct.rs:20:1
+   |
+20 | #[resilient(carrier)]
+   | ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

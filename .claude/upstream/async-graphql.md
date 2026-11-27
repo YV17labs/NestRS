@@ -19,7 +19,7 @@
 - **Canary** — `nest-rs-seaorm`'s unit test
   `wire_date_time::tests::async_graphql_still_spells_offset_zero_plus_zero`.
 - **Upstream** — not filed.
-- **When fixed** — in nestrs 8, an `#[expose]`d instant can keep its column's
+- **When fixed** — in the next nestrs major, an `#[expose]`d instant can keep its column's
   own type on the wire and `WireDateTime` goes, if the scalar's description and
   `@specifiedBy` URL stay what they are: a wire row's field changes type, which
   an app reading it through `as_ref()` sees. About an hour, the macro's tests
@@ -55,12 +55,12 @@
   field alone; a mutation's fields run serially, so one already executed loses
   its answer and those after it never run. `nest-rs-graphql`'s in-process suite
   fails 35 of its 546 tests on rc.5, about 28 of them this.
-- **Our side** — none: 7.x stays on `=7.2`, and 8.0 waits for nestrs 8
+- **Our side** — none: nestrs stays on `=7.2`, and async-graphql 8.0 waits for the next nestrs major
   (`.claude/decisions/public-dependencies.md`, 2026-11-17).
 - **Canary** — none in the tree: the move to 8.0 runs `nest-rs-graphql`'s
   null-propagation suite, which fails while this holds.
 - **Upstream** — not filed.
-- **When fixed** — nothing in 7.x; the move to 8.0 is measured again on the
+- **When fixed** — nothing within a nestrs major; the move to 8.0 is measured again on the
   final release, nestrs's own null propagation re-read against it.
 - **Ticket** —
 
@@ -97,7 +97,7 @@
 - **Upstream** — not filed.
 - **When fixed** — a 7.x release requiring `lru` 0.18.2 or later is taken in a
   nestrs minor, and the ignore and the page's caution go; a fix in 8.0 alone
-  waits for nestrs 8. Minutes.
+  waits for the next nestrs major. Minutes.
 - **Ticket** —
 
   > **Require `lru` 0.18.2 or later (RUSTSEC-2026-0253), on 7.x too**
@@ -108,3 +108,55 @@
   > `remove`, and every application enabling `dataloader` carries the advisory
   > in its audit, with no release to move to. Could the requirement move to
   > `lru` 0.18.2 or later, in a 7.2 patch as well as in 8.0?
+
+## A subscription's stream item is named outside the method, so it borrows nothing of it
+
+- **Seen** — 7.2.1: `#[Subscription]` names the item of a method's stream as
+  `<<#stream_ty as Stream>::Item as OutputType>`, in the root's
+  `SubscriptionType::create_type_info` and in `create_field_stream`'s
+  `ResolveInfo` (`async-graphql-derive`'s `src/subscription.rs`), where only the
+  impl's generics are declared. Built alone, with no nestrs code, the Ticket's
+  method is two `E0261`, "lifetime `'a` is missing in item created through this
+  procedural macro"; an `#[Object]` method returning `&'a str` through `&'a self`
+  builds.
+- **Effect** — a stream may borrow from its resolver, but the items it yields
+  cannot: a `#[subscription]` yields owned items, a `String` cloned per item.
+- **Our side** — a documented limit: `docs/src/content/docs/graphql/subscriptions.mdx`
+  (*A stream's item borrows nothing of the method*), and
+  `.claude/decisions/resilience-policy.md`, 2026-11-22, *Limits, named*.
+- **Canary** — `nest-rs-macro-hygiene`'s snapshot
+  `graphql/subscription_item_borrowed_through_self`: its fixture compiles the
+  day the derive declares the method's lifetimes where it names the item, and
+  trybuild fails it.
+- **Upstream** — not filed.
+- **When fixed** — the page's bullet and the decision's limit go, and the
+  fixture becomes a behaviour test streaming borrowed items in
+  `nest-rs-graphql`'s `subscription.rs`. An hour.
+- **Ticket** —
+
+  > **`#[Subscription]`: a stream item borrowing through the method's lifetime is `E0261`**
+  >
+  > ```rust
+  > use async_graphql::Subscription;
+  > use futures_util::stream::{self, Stream};
+  >
+  > struct Chimes {
+  >     chimes: Vec<String>,
+  > }
+  >
+  > #[Subscription]
+  > impl Chimes {
+  >     async fn chimes<'a>(&'a self) -> impl Stream<Item = &'a str> + 'a {
+  >         stream::iter(self.chimes.iter().map(String::as_str))
+  >     }
+  > }
+  > ```
+  >
+  > 7.2.1 refuses it with two `E0261`, "lifetime `'a` is missing in item created
+  > through this procedural macro": the derive names
+  > `<<dyn Stream<Item = &'a str> as Stream>::Item as OutputType>` in
+  > `SubscriptionType::create_type_info` and in `create_field_stream`, outside the
+  > method, where `'a` is undeclared. An `#[Object]` method returning `&'a str`
+  > through `&'a self` builds. Could the item's type be named where the method's
+  > lifetimes are in scope, or with them erased to `'static` where only its type
+  > information is read?

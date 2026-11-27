@@ -367,8 +367,10 @@ impl Inner {
     }
 
     /// A call that got no answer: a timeout says the bound it hit, and any
-    /// other failure keeps reqwest's chain without the URL, which it quotes
-    /// whole — its query may carry a credential.
+    /// other failure keeps reqwest's error, which a line says as
+    /// `nest-rs-reqwest` reads it — its kind and, of a handshake, rustls's
+    /// reason, never the URL it quotes whole, whose query may carry a
+    /// credential.
     fn call_failed(&self, error: reqwest::Error) -> Failure {
         if error.is_timeout() {
             let detail = if error.is_connect() {

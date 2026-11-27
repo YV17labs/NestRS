@@ -204,6 +204,9 @@ nest-rs-server-timing = { path = "../nest-rs-server-timing" }
 nest-rs-static-files = { path = "../nest-rs-static-files" }
 nest-rs-storage = { path = "../nest-rs-storage" }
 nest-rs-throttler = { path = "../nest-rs-throttler" }
+# `chain_answers` decodes a partner's answer as an app's handler does, with the
+# reqwest client an app builds itself.
+reqwest.workspace = true
 # `env.rs`'s unit test lays out a repository of packages to find the
 # project's root in, removed when it drops.
 tempfile.workspace = true

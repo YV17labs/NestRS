@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use http::{Method, StatusCode};
+use http::Method;
 
 use crate::allow::{Chosen, HeadAsGet, Methods, head_of};
 use crate::endpoint::{BoxEndpoint, Endpoint};
@@ -133,12 +133,9 @@ impl Entry {
             .zip(values)
             .map(|(name, raw)| match percent_decoded(raw) {
                 Some(value) => Ok((Arc::clone(name), value.into_owned())),
-                None => Err(HttpError::new(
-                    PathParameterError {
-                        name: Arc::clone(name),
-                    },
-                    StatusCode::BAD_REQUEST,
-                )),
+                None => Err(HttpError::from(PathParameterError {
+                    name: Arc::clone(name),
+                })),
             })
             .collect()
     }
@@ -307,6 +304,7 @@ fn percent_decoded(raw: &str) -> Option<Cow<'_, str>> {
 mod tests {
     use super::*;
     use crate::RouteTemplate;
+    use http::StatusCode;
 
     /// The tree `templates` compile into, each entry its index.
     fn tree(templates: &[&str]) -> Node {

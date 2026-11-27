@@ -1,0 +1,5 @@
+error[E0261]: use of undeclared lifetime name `'a`
+  --> tests/integration/diagnostics/graphql/entity_answer_borrowed_through_self.rs:25:57
+   |
+25 |     async fn find_post_by_id<'a>(&'a self, id: i32) -> &'a Post {
+   |                                                         ^^ undeclared lifetime

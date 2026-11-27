@@ -127,20 +127,59 @@ Redis connection is one multiplexed socket, not a pool, and reports none.
 
 ## Resilience policies
 
-A [resilience policy](/fundamentals/resilience/) counts on three counters, each
-by `nestrs.resilience.instance` — the policy's instance, empty for the default
-one:
+A [resilience policy](/fundamentals/resilience/) counts what it does on four
+counters, each by `nestrs.resilience.instance` — the policy's instance, which
+the default instance's series carry none of:
 
 | Instrument | One per |
 |---|---|
-| `nestrs.resilience.breaker.transitions` (`{transition}`) | change of its breaker's state, by `nestrs.resilience.breaker.state`: `open`, `half_open`, `closed` |
+| `nestrs.resilience.breaker.transitions` (`{transition}`) | transition of its breaker, by `nestrs.resilience.breaker.state`, the state entered: `open`, `half_open`, `closed`; a switch by hand, counted even into the state it found, also carries `nestrs.resilience.breaker.manual`, `true` |
 | `nestrs.resilience.retries` (`{retry}`) | call it sent again |
-| `nestrs.resilience.refusals` (`{refusal}`) | run it ended on its own refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full` |
+| `nestrs.resilience.refusals` (`{refusal}`) | run it ended on its own refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full`, `limited` |
+| `nestrs.resilience.fallbacks` (`{fallback}`) | run a fallback answered in place of its error |
 
-An alert on a transition to `open` is an alert on a dependency failing, and a
-climbing `refusals` is its clients being answered `503`. No convention names a
-circuit breaker or a retry policy, so the names and their attributes are
-NestRS's own, and API: they change only in a major.
+A transition to `open` marked `nestrs.resilience.breaker.manual` is an
+operator's switch. Unmarked, it is failures opening the breaker, a probe
+failing, or a probe its caller dropped once sent, unanswered and before that drop
+counts [as a timeout](/fundamentals/circuit-breaker/#how-it-opens-and-closes), no
+probe of its series having succeeded; the next call then probes. `refusals` counts the runs the policy ended on its own refusal,
+whether its caller is answered `503` or the method's fallback answers in its
+place, which `fallbacks` then counts too. A run's last attempt given up at its
+bound counts as `timed_out` as it ends, so it is counted too where its savepoint
+then cannot settle and the run answers `Unsettled`. Its `limited` is the rate a
+dependency allows reached.
+
+What a policy holds is read when the metric reader exports, on up-down
+counters keyed the same way — recorded on no call, and only for a mechanism
+the policy has on:
+
+| Instrument | What it reads |
+|---|---|
+| `nestrs.resilience.breaker.status` (`1`) | the breaker's state as a call arriving now meets it, by `nestrs.resilience.breaker.state`: `1` on the state it is in, `0` on the two others |
+| `nestrs.resilience.breaker.outcomes` (`{outcome}`) | the outcomes its window counts, by `nestrs.resilience.breaker.outcome`: `failure` and `success`, both read off the window at one instant |
+| `nestrs.resilience.concurrency.running` (`{call}`) | calls holding a slot of the bulkhead |
+| `nestrs.resilience.concurrency.waiting` (`{call}`) | calls waiting for a slot |
+| `nestrs.resilience.rate.available` (`{token}`) | tokens of the rate limit free |
+
+Each is the read of that name on `ResiliencePolicy` — `breaker_state`,
+`breaker_stats`, `concurrency_running`, `concurrency_waiting`,
+`rate_available`. The two `outcomes` sum to the window's count, and `failure`
+over that sum is `BreakerStats::failure_rate`. A dependency in trouble reads as
+`failure` climbing toward
+`BREAKER_FAILURES` before `status` moves to `open`; a saturated bulkhead as
+`running` at `CONCURRENCY` while `waiting` climbs. Summed over replicas,
+`status` counts the replicas in each state. It reads `half_open` as soon as the
+open time has passed, where `transitions` counts `half_open` only once a probe
+is sent; and a window is forgotten as its breaker opens, so both `outcomes`
+read `0` until it has closed again. A policy's reads are observed on the meter
+provider `OpenTelemetry::init()` seats from the policy's next run after it, and
+a counter — a retry, a refusal, a transition or a fallback — counts there from
+its next record after it. Neither loses what follows `init()`, whenever the
+policy was built or first ran; only what a call records before `init()` goes
+nowhere.
+
+No convention names a circuit breaker or a retry policy, so the names and
+their attributes are NestRS's own, and API: they change only in a major.
 
 ## A first counter
 

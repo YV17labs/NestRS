@@ -1,5 +1,7 @@
 //! Every error a GraphQL response carries says a decode failure without its
-//! value — on the POST path and over the socket alike.
+//! value — on the POST path and over the socket alike: one a resolver says is
+//! its client's by the report, and one its chain merely holds — an upstream's
+//! answer, a stored value — opaquely, the server's own failure.
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -7,7 +9,7 @@ use nest_rs_testing::TestApp;
 
 const SECRET: &str = "sk_live_51HsecretTOKEN";
 
-/// What the `own_*` resolvers decode: a number, sent a secret.
+/// What the `own_*` resolvers decode: a number, answered a secret.
 const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
 
 #[derive(
@@ -55,6 +57,15 @@ impl ChargeResolver {
     #[public]
     async fn own_anyhow(&self) -> nest_rs_core::anyhow::Result<u64> {
         Ok(serde_json::from_str::<u64>(SECRET_BODY)?)
+    }
+
+    #[query]
+    #[public]
+    async fn own_refusal(&self) -> nest_rs_core::anyhow::Result<u64> {
+        let decoded = serde_json::from_str::<u64>(SECRET_BODY).map_err(|failure| {
+            nest_rs_core::Problem::from(nest_rs_core::DecodeError::from(failure))
+        })?;
+        Ok(decoded)
     }
 
     #[query]
@@ -160,12 +171,21 @@ async fn boot() -> TestApp {
         .expect("the schema boots and mounts at /graphql")
 }
 
+/// What a decode failure of [`SECRET_BODY`] is reported as.
+const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
+
 /// Each request, and the message its one error must carry.
 fn cases() -> Vec<(serde_json::Value, &'static str)> {
-    let report = "invalid type: a string, expected u64 at line 1 column 24";
     vec![
-        (serde_json::json!({ "query": "{ ownDecode }" }), report),
-        (serde_json::json!({ "query": "{ ownAnyhow }" }), report),
+        (
+            serde_json::json!({ "query": "{ ownDecode }" }),
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        ),
+        (
+            serde_json::json!({ "query": "{ ownAnyhow }" }),
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        ),
+        (serde_json::json!({ "query": "{ ownRefusal }" }), REPORT),
         (
             serde_json::json!({
                 "query": "query($card: JSON!) { chargeCard(card: $card) }",
@@ -329,14 +349,22 @@ async fn an_error_an_operation_answers_over_the_socket_says_it_without_the_value
     let app = boot().await;
     let mut socket = app.graphql_socket().open();
     socket.connect().await;
-    for (id, query) in [("decode", "{ ownDecode }"), ("anyhow", "{ ownAnyhow }")] {
+    for (id, query, said) in [
+        (
+            "decode",
+            "{ ownDecode }",
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        ),
+        (
+            "anyhow",
+            "{ ownAnyhow }",
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        ),
+        ("refusal", "{ ownRefusal }", REPORT),
+    ] {
         socket.subscribe(id, query);
         let item = socket.next_item(id).await.expect("the operation answers");
-        assert_eq!(
-            item["errors"][0]["message"],
-            "invalid type: a string, expected u64 at line 1 column 24",
-            "{item}",
-        );
+        assert_eq!(item["errors"][0]["message"], said, "{item}");
         assert!(!item.to_string().contains(SECRET), "{item}");
     }
 }

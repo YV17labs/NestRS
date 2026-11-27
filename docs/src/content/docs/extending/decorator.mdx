@@ -1,6 +1,6 @@
 ---
 title: Writing a decorator
-description: "Write an attribute macro on nest-rs-codegen's kit: keys read as every decorator reads them, paths that hold across 7.x, discovery gated on the app's imports."
+description: "Write an attribute macro on nest-rs-codegen's kit: keys read as every decorator reads them, paths that hold across a major, discovery gated on the app's imports."
 sidebar:
   order: 4
 ---
@@ -10,8 +10,8 @@ that expands into the code your package needs: a trait implementation, a
 registry entry. NestRS writes its own on a kit it publishes, `nest-rs-codegen`,
 so yours reads its keys, words its refusals and roots its paths as every
 framework decorator does. At the end of this page your attribute expands in
-any app on any 7.x, and what it declares is discovered only in an app that
-imports your module.
+any app on any later minor, and what it declares is discovered only in an app
+that imports your module.
 
 ```rust title="from nest-rs-codegen's crate example"
 use nest_rs_codegen::{Grammar, reroot};
@@ -89,7 +89,7 @@ compiled example on docs.rs:
 
 ## Emit paths that hold
 
-Your macro is compiled against one 7.x and expands in apps on later ones, so
+Your macro is compiled against one minor and expands in apps on later ones, so
 its expansion keeps two rules:
 
 1. **A framework path is emitted as `::nest_rs_<concern>::<item>`**, an item
@@ -209,5 +209,5 @@ discovers what production does.
   keys, the grammar yours joins.
 - [Writing a package](/extending/package/) — the module that reads your
   registry.
-- [Semver policy](/semver/) — what a 7.x keeps of the paths your expansion
+- [Semver policy](/semver/) — what a minor keeps of the paths your expansion
   emits.

@@ -180,27 +180,41 @@ fn extended(added: Entries) -> Option<Arc<RequestCtx>> {
     if added.is_empty() {
         return None;
     }
-    let Some(current) = current_request_ctx(Arc::clone) else {
-        return Some(Arc::new(RequestCtx {
+    let current = current_request_ctx(Arc::clone);
+    if current
+        .as_ref()
+        .is_some_and(|current| carries(current, &added))
+    {
+        return None;
+    }
+    Some(merged(current.as_deref(), added))
+}
+
+/// Whether `current` already carries every value of `added`, the very one.
+fn carries(current: &RequestCtx, added: &Entries) -> bool {
+    added.iter().all(|entry| current.ambient.holds(entry))
+}
+
+/// `current` with `added` merged in, or `added` alone where no unit runs.
+fn merged(current: Option<&RequestCtx>, added: Entries) -> Arc<RequestCtx> {
+    let Some(current) = current else {
+        return Arc::new(RequestCtx {
             scope: None,
             correlation: None,
             ambient: added,
             parent: None,
-        }));
+        });
     };
-    if added.iter().all(|entry| current.ambient.holds(entry)) {
-        return None;
-    }
     let mut ambient = current.ambient.clone();
     for entry in added.iter() {
         ambient.set(entry.clone());
     }
-    Some(Arc::new(RequestCtx {
+    Arc::new(RequestCtx {
         scope: current.scope.clone(),
         correlation: current.correlation.clone(),
         ambient,
         parent: current.parent.clone(),
-    }))
+    })
 }
 
 /// The current request's [`RequestScope`], installed by the transport edge.
@@ -477,8 +491,39 @@ impl RequestScope {
 pub(crate) mod __private {
     use std::sync::Arc;
 
-    use super::{RequestContinuation, RequestScope};
+    use super::{REQUEST_CTX, RequestContinuation, RequestCtx, RequestScope};
     use crate::Container;
+    use crate::ambient::{AmbientValue, Entries, Entry};
+
+    /// What [`with_ambient`](crate::with_ambient) installs around a future,
+    /// derived once where it is built and held, to be entered around each poll
+    /// of a future its holder polls in place: an install wrapping that future
+    /// anew at every poll would derive the context, an allocation and a copy of
+    /// the unit's values, each time.
+    pub struct ExtendedContext(pub(super) Arc<RequestCtx>);
+
+    impl ExtendedContext {
+        /// What the unit running here carries, `value` in place of its `T`.
+        pub fn with<T: AmbientValue>(value: Arc<T>) -> Self {
+            let mut added = Entries::default();
+            added.set(Entry::of(value));
+            let current = super::current_request_ctx(Arc::clone);
+            Self(match current {
+                Some(current) if super::carries(&current, &added) => current,
+                current => super::merged(current.as_deref(), added),
+            })
+        }
+
+        /// Run `f` under the context: synchronous, for one poll.
+        pub fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
+            REQUEST_CTX.sync_scope(Arc::clone(&self.0), f)
+        }
+
+        /// The `T` the context carries.
+        pub fn get<T: AmbientValue>(&self) -> Option<Arc<T>> {
+            self.0.ambient.get::<T>()
+        }
+    }
 
     /// The unit [`with_request_scope`](super::with_request_scope) would open
     /// here, held to be entered around each poll of a stream it runs as — a
@@ -933,6 +978,56 @@ mod tests {
         fn carry(self: Arc<Self>, into: crate::Continuation) -> Option<Arc<Self>> {
             (into != crate::Continuation::Envelope).then_some(self)
         }
+    }
+
+    /// Held past the poll that derived it, an extended context is the unit's
+    /// own with the value in place of the one of its type: entered again and
+    /// again it is the same context, and a value the unit already carries
+    /// derives none.
+    #[tokio::test]
+    async fn an_extended_context_is_derived_once_and_entered_at_each_poll() {
+        use super::__private::ExtendedContext;
+
+        let correlation = crate::Correlation::minted(None);
+        let trace_id = correlation.trace_id();
+        let carried = Arc::new(Judge("unit"));
+        let (extended, unchanged) = with_request_scope(
+            None,
+            correlation,
+            crate::with_ambient(Arc::clone(&carried), async {
+                let running = current_request_ctx(Arc::clone).expect("a unit runs");
+                let unchanged = ExtendedContext::with(carried);
+                assert!(Arc::ptr_eq(&unchanged.0, &running));
+                let replaced = ExtendedContext::with(Arc::new(Judge("attempt")));
+                assert!(!Arc::ptr_eq(&replaced.0, &running));
+                (ExtendedContext::with(Arc::new(Marker)), unchanged)
+            }),
+        )
+        .await;
+
+        assert!(crate::ambient::<Judge>().is_none(), "the unit is over");
+        assert!(unchanged.get::<Marker>().is_none());
+        assert!(extended.get::<Marker>().is_some());
+        for _poll in 0..2 {
+            let entered = extended.enter(|| {
+                assert!(crate::ambient::<Marker>().is_some());
+                assert_eq!(crate::current_trace_id(), Some(trace_id));
+                current_request_ctx(Arc::clone).expect("entered")
+            });
+            assert!(Arc::ptr_eq(&entered, &extended.0), "no context is derived");
+            assert_eq!(
+                entered.ambient.get::<Judge>().map(|judge| judge.0),
+                Some("unit")
+            );
+        }
+
+        let bare = ExtendedContext::with(Arc::new(Marker));
+        assert!(
+            bare.enter(
+                || crate::ambient::<Marker>().is_some() && crate::current_trace_id().is_none()
+            ),
+            "outside every unit, the value alone"
+        );
     }
 
     /// What `fut` reads, run as a unit nested in one carrying `opened`.

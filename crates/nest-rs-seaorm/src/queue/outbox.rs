@@ -7,7 +7,6 @@
 //! statements on a framework table, joining the transaction the unit already
 //! holds, never a developer's row.
 
-use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -15,7 +14,7 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use nest_rs_core::ContainerBuilder;
 use nest_rs_database::{
-    AtomicBlock, ClaimedRecord, OutboxClaim, OutboxError, OutboxRecord, OutboxStore,
+    ClaimedRecord, OutboxClaim, OutboxError, OutboxKept, OutboxRecord, OutboxStore,
 };
 use nest_rs_queue::OutboxModule;
 use sea_orm::{
@@ -24,8 +23,6 @@ use sea_orm::{
 };
 use tokio::sync::Notify;
 
-use crate::atomic::AtomicExecutor;
-use crate::executor::{Installed, SeaOrmExecutor};
 use crate::statements::Statements;
 
 /// The table the store keeps its records in.
@@ -55,8 +52,8 @@ const CLAIM: &str = "SELECT seq, queue, job_id, sealed, unique_key, attempts, \
 /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) under the `queue`
 /// feature.
 ///
-/// Its executors write nothing until the relay [armed](OutboxStore::arm) it:
-/// an app running no relay files every job at once, as before.
+/// Its transactions write nothing until the relay [armed](OutboxStore::arm)
+/// it: an app running no relay files every job at once.
 pub struct SeaOrmOutbox {
     db: DatabaseConnection,
     armed: AtomicBool,
@@ -82,68 +79,27 @@ impl SeaOrmOutbox {
     pub(crate) fn wake(&self) {
         self.written.notify_one();
     }
-
-    /// Run a removal of a kept record on the store's pool, outside every
-    /// transaction, answering whether it deleted one.
-    pub(crate) async fn remove_on_pool(&self, removal: Statement) -> Result<bool, OutboxError> {
-        removed(self.db.execute_raw(removal).await)
-    }
 }
 
-/// The pool a boundary keeping an outbox hands on — to its after-commit work,
-/// to a step out of its transaction: a push there is filed at once, as on any
-/// pool, while a block of its own keeps its pushes until it commits and a
-/// cancel deletes a record no relay has filed, as on a pool unit.
-pub(crate) struct KeepingPool {
-    pool: Installed,
-    outbox: Arc<SeaOrmOutbox>,
-}
-
-impl KeepingPool {
-    /// `pool`, keeping `outbox`.
-    pub(crate) fn new(pool: DatabaseConnection, outbox: Arc<SeaOrmOutbox>) -> Self {
-        Self {
-            pool: Installed(SeaOrmExecutor::Pool(pool)),
-            outbox,
-        }
-    }
-
-    /// The outbox a cancel deletes a kept record from, once a relay armed it.
-    fn outbox(&self) -> Option<&Arc<SeaOrmOutbox>> {
-        Some(&self.outbox).filter(|outbox| outbox.is_armed())
-    }
-}
-
-impl nest_rs_database::Executor for KeepingPool {
-    fn as_any(&self) -> &dyn Any {
-        &self.pool
-    }
-
-    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        let own = self
-            .pool
-            .0
-            .own_block()?
-            .keeping(Some(Arc::clone(&self.outbox)));
-        Some(Arc::new(AtomicExecutor::own(Arc::new(own))))
-    }
-
-    fn remove_outbox<'a>(
+/// On the store's pool, outside every transaction: what a cancel on the pool
+/// reaches, a record a committed unit wrote and no relay has filed.
+impl OutboxKept for SeaOrmOutbox {
+    fn remove<'a>(
         &'a self,
         queue: &'a str,
         id: uuid::Uuid,
-    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
-        let outbox = self.outbox()?;
-        Some(Box::pin(outbox.remove_on_pool(removal_of_job(queue, id))))
+    ) -> BoxFuture<'a, Result<bool, OutboxError>> {
+        let removal = removal_of_job(queue, id);
+        Box::pin(async move { removed(self.db.execute_raw(removal).await) })
     }
 
-    fn remove_outbox_unique<'a>(
+    fn remove_unique<'a>(
         &'a self,
         queue: &'a str,
         key: &'a str,
-    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
-        let outbox = self.outbox()?;
-        Some(Box::pin(outbox.remove_on_pool(removal_of_key(queue, key))))
+    ) -> BoxFuture<'a, Result<bool, OutboxError>> {
+        let removal = removal_of_key(queue, key);
+        Box::pin(async move { removed(self.db.execute_raw(removal).await) })
     }
 }
 

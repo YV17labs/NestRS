@@ -243,8 +243,10 @@ async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>>
   sent. `Form<T>` (``form field `grant_type`: missing``), `Query<T>` (``query
   parameter `file`: a value its type does not accept, expected a formatted UUID
   string``), `Path<T>` and `Header<T>` refuse the same way, and so does a
-  handler's own decode returned as a `400`
-  (`HttpError::new(err, StatusCode::BAD_REQUEST)`).
+  handler's own decode of its client's text, said as the client's with
+  `Problem::from(DecodeError::from(err))`, as on every edge. A decode failure
+  the handler did not say so of — an upstream's answer, a stored value — is the
+  server's opaque `500`.
 - **The rules `GreetInput` declares** run on the extracted value, after the
   guards and before the handler, with nothing to wrap: a failure returns
   `400` with the structured error list — no manual checks in the handler.

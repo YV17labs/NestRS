@@ -1382,3 +1382,115 @@ async fn an_operation_past_the_socket_cap_is_answered_an_error_and_the_rest_keep
     assert_eq!(state.tx.receiver_count(), 2, "the third never ran");
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+// A stream may borrow through its receiver's lifetime, which the wrapper names too; its item
+// names none, async-graphql's derive reading the item outside the method.
+
+/// The chimes a stream reads off the resolver holding them.
+struct Chimes(Vec<String>);
+
+impl Default for Chimes {
+    fn default() -> Self {
+        Self(vec!["first chime".to_owned(), "second chime".to_owned()])
+    }
+}
+
+#[resolver]
+#[derive(Default)]
+struct BorrowingResolver {
+    chimes: Chimes,
+}
+
+#[operations]
+impl BorrowingResolver {
+    #[subscription]
+    #[public]
+    async fn chimes<'a>(&'a self) -> impl futures_stream::Stream<Item = String> + 'a {
+        futures_stream::iter(self.chimes.0.iter().cloned())
+    }
+}
+
+#[module(imports = [GraphqlModule, TickModule], providers = [BorrowingResolver])]
+struct BorrowingApp;
+
+#[tokio::test]
+async fn a_subscription_borrowing_through_the_lifetime_its_receiver_names_streams() {
+    let app = TestApp::builder()
+        .module::<BorrowingApp>()
+        .build()
+        .await
+        .expect("a subscription borrowing from its resolver boots");
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("chimes", "subscription { chimes }");
+
+    let first = socket.next_item("chimes").await.expect("the first item");
+    assert_eq!(first["data"]["chimes"], "first chime", "{first}");
+    let second = socket.next_item("chimes").await.expect("the second item");
+    assert_eq!(second["data"]["chimes"], "second chime", "{second}");
+}
+
+#[resolver]
+#[derive(Default)]
+struct FragmentResolver {
+    chimes: Chimes,
+}
+
+// The method comes through `tt` fragments, keeping the caller's spans, and
+// `#[operations]` the macro's: what the expansion binds resolves in the method's.
+macro_rules! declare_fragment_subscriptions {
+    ($($subscriptions:tt)*) => {
+        #[operations]
+        impl FragmentResolver {
+            $($subscriptions)*
+        }
+    };
+}
+
+declare_fragment_subscriptions! {
+    #[subscription]
+    #[public]
+    async fn counted_twice(&self) -> impl futures_stream::Stream<Item = i32> {
+        futures_stream::iter([1, 2])
+    }
+
+    #[subscription]
+    #[public]
+    async fn fragment_chimes<'a>(&'a self) -> impl futures_stream::Stream<Item = String> + 'a {
+        futures_stream::iter(self.chimes.0.iter().cloned())
+    }
+}
+
+#[module(imports = [GraphqlModule, TickModule], providers = [FragmentResolver])]
+struct FragmentApp;
+
+#[tokio::test]
+async fn a_subscription_a_macro_fragment_writes_streams_as_the_one_written_out() {
+    let app = TestApp::builder()
+        .module::<FragmentApp>()
+        .build()
+        .await
+        .expect("a subscription its macro declares boots");
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("counted_twice", "subscription { countedTwice }");
+
+    let first = socket
+        .next_item("counted_twice")
+        .await
+        .expect("the first item");
+    assert_eq!(first["data"]["countedTwice"], 1, "{first}");
+    let second = socket
+        .next_item("counted_twice")
+        .await
+        .expect("the second item");
+    assert_eq!(second["data"]["countedTwice"], 2, "{second}");
+
+    // Once the first has streamed: `next_item` skips another operation's frames.
+    socket.subscribe("fragment_chimes", "subscription { fragmentChimes }");
+    let chimed = socket
+        .next_item("fragment_chimes")
+        .await
+        .expect("the borrowed item");
+    assert_eq!(chimed["data"]["fragmentChimes"], "first chime", "{chimed}");
+}

@@ -66,7 +66,7 @@ deleted is no denial. `Repo::unscoped` and
 so a deleted account cannot sign in. `Repo::with_tombstones` is the one
 read that keeps them, for an administrator's view or a retention job. It
 reads only: no `Repo` write brings a deleted row back yet — `Repo::restore`
-is planned for 7.x.
+is planned for a minor.
 
 ### A custom query
 

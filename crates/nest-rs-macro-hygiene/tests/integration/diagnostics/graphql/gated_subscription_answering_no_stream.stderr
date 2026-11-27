@@ -1,0 +1,40 @@
+error[E0277]: a `#[subscription]` answers a stream, and `Result<Pin<Box<(dyn Stream<Item = i32> + std::marker::Send + 'static)>>, nest_rs::graphql::async_graphql::Error>` is none
+  --> tests/integration/diagnostics/graphql/gated_subscription_answering_no_stream.rs:18:1
+   |
+18 | #[operations]
+   | ^^^^^^^^^^^^^ no stream
+   |
+   = help: the trait `nest_rs::graphql::__private::AnsweredStream` is not implemented for `Result<Pin<Box<(dyn Stream<Item = i32> + std::marker::Send + 'static)>>, nest_rs::graphql::async_graphql::Error>`
+   = note: answer `impl Stream<Item = T>`, a stream type such as `BoxStream<'static, T>`, or one of those inside `Result<…>`: async-graphql reads a fallible return by its spelling — `Result` or `FieldResult` — and takes any other for the stream itself
+
+error[E0277]: a `#[subscription]` answers a stream, and this one returns a `Result` spelled another way
+  --> tests/integration/diagnostics/graphql/gated_subscription_answering_no_stream.rs:22:30
+   |
+22 |     async fn ticks(&self) -> Fallible<BoxStream<'static, i32>> {
+   |                              ^^^^^^^^ a `Result` under another name
+   |
+   = help: the trait `nest_rs::graphql::__private::IsStreamReturn` is not implemented for `nest_rs::core::__private::ResultAnswer`
+   = note: write it `Result<impl Stream<Item = T>, E>`: async-graphql reads a fallible return by its spelling — `Result` or `FieldResult` — and takes any other for the stream itself
+note: required by a bound in `nest_rs::graphql::__private::answers_a_stream`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/operation.rs
+   |
+   | pub fn answers_a_stream<K: IsStreamReturn>(_: K) {}
+   |                            ^^^^^^^^^^^^^^ required by this bound in `answers_a_stream`
+
+error[E0277]: the trait bound `Result<Pin<Box<(dyn Stream<Item = i32> + std::marker::Send + 'static)>>, nest_rs::graphql::async_graphql::Error>: Stream` is not satisfied
+  --> tests/integration/diagnostics/graphql/gated_subscription_answering_no_stream.rs:22:30
+   |
+22 |     async fn ticks(&self) -> Fallible<BoxStream<'static, i32>> {
+   |                              ^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `nest_rs::graphql::__private::AnsweredStream` is not implemented for `Result<Pin<Box<(dyn Stream<Item = i32> + std::marker::Send + 'static)>>, nest_rs::graphql::async_graphql::Error>`
+
+error[E0277]: a `#[subscription]` answers a stream, and `Result<Pin<Box<(dyn Stream<Item = i32> + std::marker::Send + 'static)>>, nest_rs::graphql::async_graphql::Error>` is none
+  --> tests/integration/diagnostics/graphql/gated_subscription_answering_no_stream.rs:18:1
+   |
+18 | #[operations]
+   | ^^^^^^^^^^^^^ no stream
+   |
+   = help: the trait `nest_rs::graphql::__private::AnsweredStream` is not implemented for `Result<Pin<Box<(dyn Stream<Item = i32> + std::marker::Send + 'static)>>, nest_rs::graphql::async_graphql::Error>`
+   = note: answer `impl Stream<Item = T>`, a stream type such as `BoxStream<'static, T>`, or one of those inside `Result<…>`: async-graphql reads a fallible return by its spelling — `Result` or `FieldResult` — and takes any other for the stream itself
+   = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

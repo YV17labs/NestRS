@@ -33,6 +33,7 @@ mod public_visitor;
 mod queue;
 mod relational_authz;
 mod repo;
+mod resilience;
 mod scope;
 mod select;
 mod service;

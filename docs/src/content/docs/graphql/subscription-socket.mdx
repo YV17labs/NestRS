@@ -67,7 +67,7 @@ whole request.
 |---|---|
 | The principal and its `Ability` | Carried, for the connection's life |
 | The trace and the `actor_id` | Carried — the socket opens one `graphql.subscription` span under the upgrade's trace |
-| A database handle | Carried, always **outside** the upgrade's transaction |
+| A database handle | **Not** carried — the socket opens a pool unit of the app's binding |
 | `RequestScope` (`Scoped<T>`) | **Not** carried — each operation opens its own |
 
 The middle row is what makes a `Repo`-backed subscription work at all: the

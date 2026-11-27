@@ -1,0 +1,41 @@
+error: #[resilient] `fallback` hands its fallback the arguments the method was called with, so none is bound `mut`: one attempt's change to `order` would reach the fallback — bind it without `mut`, and change a copy inside the body
+  --> tests/integration/diagnostics/resilience/resilient_fallback_changes_an_argument.rs:42:27
+   |
+42 |     async fn label(&self, mut order: String) -> Answer<usize> {
+   |                           ^^^
+
+error: #[resilient] `fallback` hands its fallback the arguments the method was called with, so none is a `&mut`: one attempt's change through `order` would reach the fallback — take it by shared reference or by value, and change a copy inside the body
+  --> tests/integration/diagnostics/resilience/resilient_fallback_changes_an_argument.rs:48:34
+   |
+48 |     async fn stamp(&self, order: &mut String) -> Answer<usize> {
+   |                                  ^^^^^^^^^^^
+
+error: #[resilient] `fallback` hands its fallback each argument under the name the method binds it to, and `(order, _zone)` binds this one to no plain name — name the argument, and take it apart inside the body
+  --> tests/integration/diagnostics/resilience/resilient_fallback_changes_an_argument.rs:54:26
+   |
+54 |     async fn pair(&self, (order, _zone): (String, u8)) -> Answer<usize> {
+   |                          ^^^^^^^^^^^^^^
+
+error: #[resilient] `fallback` hands its fallback each argument under the name the method binds it to, and `_` binds this one to no plain name — name the argument, and take it apart inside the body
+  --> tests/integration/diagnostics/resilience/resilient_fallback_changes_an_argument.rs:59:29
+   |
+59 |     async fn unnamed(&self, _: String) -> Answer<usize> {
+   |                             ^
+
+error: #[resilient] `fallback` hands its fallback each argument under the name the method binds it to, and `(mut order, _zone)` binds this one to no plain name — name the argument, and take it apart inside the body
+  --> tests/integration/diagnostics/resilience/resilient_fallback_changes_an_argument.rs:64:34
+   |
+64 |     async fn pair_changed(&self, (mut order, _zone): (String, u8)) -> Answer<usize> {
+   |                                  ^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] `fallback` hands its fallback each argument under the name the method binds it to, and `ref mut order` binds this one by reference — bind it by value, `order`, and change a copy inside the body
+  --> tests/integration/diagnostics/resilience/resilient_fallback_changes_an_argument.rs:70:38
+   |
+70 |     async fn stamped_in_place(&self, ref mut order: String) -> Answer<usize> {
+   |                                      ^^^^^^^^^^^^^
+
+error: #[resilient] `fallback` hands its fallback each argument under the name the method binds it to, and `ref order` binds this one by reference — bind it by value, `order`, and borrow it inside the body
+  --> tests/integration/diagnostics/resilience/resilient_fallback_changes_an_argument.rs:76:30
+   |
+76 |     async fn borrowed(&self, ref order: String) -> Answer<usize> {
+   |                              ^^^^^^^^^

@@ -1,0 +1,24 @@
+error[E0382]: use of moved value: `order`
+  --> tests/integration/diagnostics/resilience/resilient_fallback_consumes_an_argument.rs:38:37
+   |
+38 |     #[resilient(carrier, fallback = queued)]
+   |                          --------   ^^^^^^ value used here after move
+   |                          |
+   |                          value moved into closure here
+   |                          use occurs due to use in closure
+39 |     async fn ship(&self, order: String) -> Answer<usize> {
+   |                          ----- move occurs because `order` has type `std::string::String`, which does not implement the `Copy` trait
+40 |         send(order).await
+   |              ----- variable moved due to use in closure
+   |
+note: consider changing this parameter type in function `send` to borrow instead if owning the value isn't necessary
+  --> tests/integration/diagnostics/resilience/resilient_fallback_consumes_an_argument.rs:29:22
+   |
+29 | async fn send(order: String) -> Result<usize, CarrierDown> {
+   |          ----        ^^^^^^ this parameter takes ownership of the value
+   |          |
+   |          in this function
+help: consider cloning the value if the performance cost is acceptable
+   |
+40 |         send(order.clone()).await
+   |                   ++++++++

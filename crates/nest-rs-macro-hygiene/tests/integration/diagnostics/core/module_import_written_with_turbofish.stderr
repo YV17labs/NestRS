@@ -1,11 +1,5 @@
-error: use of deprecated constant `_::IMPORT_WRITTEN_WITH_TURBOFISH`: #[module] `imports`: write `ShelfModule<Cache>`, a module as its type, without `::` before `<`; NestRS 8.0 refuses this spelling
-  --> tests/integration/diagnostics/core/module_import_written_with_turbofish.rs:22:52
+error: #[module] `imports`: write `ShelfModule<Cache>`, a module as its type, without `::` before `<`
+  --> tests/integration/diagnostics/core/module_import_written_with_turbofish.rs:20:52
    |
-22 | #[module(imports = [ShelfModule<Cache>, ShelfModule::<Cache>])]
+20 | #[module(imports = [ShelfModule<Cache>, ShelfModule::<Cache>])]
    |                                                    ^
-   |
-note: the lint level is defined here
-  --> tests/integration/diagnostics/core/module_import_written_with_turbofish.rs:5:9
-   |
- 5 | #![deny(deprecated)]
-   |         ^^^^^^^^^^

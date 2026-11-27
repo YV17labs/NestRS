@@ -194,7 +194,9 @@ impl ClientTls {
     /// What to change about a handshake `error` failed, naming `env`'s variables:
     /// `peer` is what the client reached (`"Redis"`, `"the JWK Set endpoint"`),
     /// `address` the key of the variable naming where it dials (`"URL"`). rustls's
-    /// own reason is left to the error's source.
+    /// own reason is left to the error's source, where a line says it: beneath a
+    /// reqwest client's error, an alert by its name, and a certificate's refusal
+    /// without the names and the dates rustls quotes.
     pub fn remedy(
         env: &ConfigService,
         peer: &str,

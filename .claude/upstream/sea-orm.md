@@ -150,7 +150,7 @@
 - **Canary** — none: a manifest line, read when the version moves.
 - **Upstream** — not filed.
 - **When fixed** — the sentence leaves the decision; chrono leaves an app's
-  tree with nestrs's own move off it, in nestrs 8. Minutes.
+  tree with nestrs's own move off it, in the next nestrs major. Minutes.
 - **Ticket** —
 
   > **sea-orm-migration: depend on sea-orm with `default-features = false`**

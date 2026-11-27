@@ -25,12 +25,12 @@ use crate::body_pipes::BodyPipes;
 use crate::deprecation::deprecated_route;
 use crate::endpoint::BoxEndpoint;
 use crate::error::{Result, RouteError};
-use crate::guard_stage::{HttpGuardStage, StageKind};
+use crate::guard_stage::{GateFn, HttpGuardStage, StageKind};
 use crate::location::caller_path;
 use crate::request::Request;
 use crate::response::Response;
+use crate::response_body::continue_body;
 use crate::routes::HttpRoutes;
-use crate::shaper::GateFn;
 use crate::site::{SiteEndpoint, SiteTail, UnitPolicy, stamp_answer};
 
 /// What `#[routes]` makes of a handler method: its parameters read off the
@@ -41,8 +41,7 @@ pub trait RouteWrapper: Send + Sync + 'static {
     fn call(&self, req: &mut Request) -> impl Future<Output = Result<Response>> + Send;
 }
 
-/// What a route runs last: its global pipes over the body, then the handler
-/// and its response shaper.
+/// What a route runs last: its global pipes over the body, then the handler.
 struct RouteTail<W> {
     handler: &'static Handler,
     pipes: BodyPipes,
@@ -56,7 +55,7 @@ impl<W: RouteWrapper> SiteTail for RouteTail<W> {
             // weigh on every route's future, which the table boxes per request.
             Box::pin(self.pipes.apply(self.handler, req)).await?;
         }
-        let mut response = self.wrapper.call(req).await?;
+        let mut response = continue_body(self.wrapper.call(req).await?);
         stamp_answer(|| caller_path(req), &mut response);
         Ok(response)
     }
@@ -99,10 +98,7 @@ fn hand_route_guard_stage(
             host: Vec::new(),
             method: Vec::new(),
             force: Vec::new(),
-            gates: Vec::new(),
-            authorized: false,
-            names_an_entity: false,
-            stream: false,
+            gate: None,
             ambient: Vec::new(),
         },
     )
@@ -126,19 +122,10 @@ pub struct RouteGuards {
     pub method: Vec<GuardSpec>,
     /// `#[force_guards]`: the guards the method re-runs.
     pub force: Vec<TypeId>,
-    /// The posture's class gates, selected by type off what the route
-    /// declares.
-    pub gates: Vec<GateFn>,
-    /// The route's posture names a subject, so a gate is its posture's and its
-    /// reads keep the ability its guards attached; elsewhere a gate can only come
-    /// from a parameter's type, and the boot refuses it.
-    pub authorized: bool,
-    /// The route's posture names an entity, a subject a table holds, so its
-    /// reads keep the ability and a stream refuses it: a response shaper is armed
-    /// on it, a posture's on an entity, or one a parameter's type declares.
-    pub names_an_entity: bool,
-    /// The route answers `#[sse]`, an event stream no shaper reconciles.
-    pub stream: bool,
+    /// The class gate the route's posture declares, when it names a subject:
+    /// its reads keep the ability its guards attached, and a route with none
+    /// reads withheld.
+    pub gate: Option<nest_rs_core::__private::ClassGate>,
     /// What the handler's `Ambient<T>` parameters read, by type: on a
     /// `#[public]` route, the principal a guard of the chain produces is one a
     /// caller it admitted without it is refused for.
@@ -146,7 +133,7 @@ pub struct RouteGuards {
 }
 
 /// The guard stage of the route `handler` declares: the app's pool, then the
-/// controller's and the method's guards, each once, then its class gates —
+/// controller's and the method's guards, each once, then its class gate —
 /// `None` when it runs none. A route whose method scope declares guards is
 /// validated whole; the controller's mount validated the rest
 /// ([`mount_controller`]).
@@ -156,20 +143,6 @@ pub fn route_guard_stage(
     declared: RouteGuards,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     let label = route_label(handler);
-    if !declared.authorized && !declared.gates.is_empty() {
-        anyhow::bail!(
-            "{label} declares its posture by a parameter's type, which arms a class gate no \
-             attribute shows — declare it with `#[authorize(Action, Subject)]`, or \
-             `#[public(Action, Subject)]` where a caller with no credential is admitted"
-        );
-    }
-    if declared.stream && declared.names_an_entity {
-        anyhow::bail!(
-            "{label} is an `#[sse]` route a parameter's type arms a response shaper on: a shaper \
-             reconciles a body, and an event stream is none, so it would go out as written, its \
-             shaper skipped — take that parameter off the stream"
-        );
-    }
     let host = resolve_scoped(container, &declared.host, LayerSite::Host, &label)
         .inspect_err(report_unresolved)?;
     let method = resolve_scoped(container, &declared.method, LayerSite::Method, &label)
@@ -184,20 +157,20 @@ pub fn route_guard_stage(
     if !declared.method.is_empty() || !declared.force.is_empty() {
         validate_route_chain(&label, &chain).map_err(anyhow::Error::msg)?;
     }
-    if !declared.gates.is_empty() {
+    if declared.gate.is_some() {
         validate_gate_reached(&label, &chain).map_err(anyhow::Error::msg)?;
     }
     log_effective_chain(&label, "guards", &chain);
     let public = handler.posture() == Posture::Public;
     let needed = NeededPrincipal::of(public, &declared.ambient, &chain);
-    let withheld = !declared.authorized && !declared.names_an_entity;
-    stage(chain, needed, declared.gates, withheld)
+    let withheld = declared.gate.is_none();
+    stage(chain, needed, declared.gate.into_iter().collect(), withheld)
 }
 
 /// The stage running `chain`, refusing a caller it admitted without the
 /// `needed` principal, then `gates`, or `None` when it runs nothing; the
 /// route's reads are withheld what its guards attached where `withheld` — its
-/// posture names no subject, and no shaper reconciles its reply.
+/// posture names no subject.
 fn stage(
     chain: Vec<ResolvedLayer<dyn Guard>>,
     needed: Option<NeededPrincipal>,
@@ -301,7 +274,6 @@ mod tests {
 
     use super::*;
     use crate::endpoint::Endpoint;
-    use crate::shaper::shaped;
     use crate::testing::{Holding, get};
 
     struct Routes;
@@ -335,7 +307,7 @@ mod tests {
         let tail = RouteTail {
             handler: &ROUTE,
             pipes: BodyPipes::none(),
-            wrapper: shaped(Holding::<N>, None),
+            wrapper: Holding::<N>,
         };
         let route = deprecated_route(SiteEndpoint::new(&ROUTE, chains, None, tail), "true");
         let handler = size_of_val(&RouteWrapper::call(&Holding::<N>, &mut get()));

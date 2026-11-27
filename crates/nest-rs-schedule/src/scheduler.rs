@@ -11,7 +11,8 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use nest_rs_core::__private::{
     GlobalLayers, HandlerDeclaration, MetaLevels, RequestScopes, Site, SiteDeclaration, SiteLayers,
-    Tail, caught_problem, declare_handler, declare_site, dispatch, new_unit_context, settled,
+    Tail, caught_problem, declare_handler, declare_site, dispatch, is_unavailable,
+    new_unit_context, settled,
 };
 use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{
@@ -1518,6 +1519,18 @@ impl Runner {
                     method = id.method,
                     error = %said,
                     "scheduled job failed; a layer answered it",
+                );
+            }
+            // A `503` is what the tick runs on unable to serve it in time — its
+            // policy's refusal, every occurrence while a breaker stays open —
+            // filed as every edge files one.
+            Ok(Err(failure)) if is_unavailable(&failure) => {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    host = id.host,
+                    method = id.method,
+                    error = %said,
+                    "scheduled job failed; unavailable",
                 );
             }
             Ok(Err(failure)) => {

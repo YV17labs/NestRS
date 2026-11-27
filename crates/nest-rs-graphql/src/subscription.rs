@@ -57,65 +57,29 @@ pub fn compose_schema(
     ))
 }
 
-/// The data handle a socket runs on when no unit-of-work binding is mounted,
-/// taken from the **upgrade request**: the `101` is answered before the
-/// connection task runs.
-///
-/// Always **non-transactional**: the request transaction is finalized with the
-/// `101`, and carrying it onto an hours-long socket would pin a pooled connection
-/// behind a transaction nobody commits.
-fn socket_executor() -> Option<Arc<dyn nest_rs_database::Executor>> {
-    nest_rs_database::current_executor()
-        .map(|executor| executor.non_transactional().unwrap_or(executor))
-}
-
-/// How a socket reaches the data layer, read off the **upgrade request**.
-enum SocketData {
-    /// The app's unit-of-work binding: the socket runs as a
-    /// [`Pool`](nest_rs_database::TransactionPolicy::Pool) unit of it, so a
-    /// DataLoader batch its operations continue into reaches that binding's
-    /// pool too.
-    Bound(Arc<dyn nest_rs_database::UnitOfWork>),
-    /// An executor the upgrade ran on outside any unit, stepped out of its
-    /// transaction ([`socket_executor`]).
-    Installed(Arc<dyn nest_rs_database::Executor>),
-}
-
-impl SocketData {
-    /// The mount's `binding`, else what the upgrade request ran on; `None`
-    /// without a data layer.
-    fn of_upgrade(binding: Option<&Arc<dyn nest_rs_database::UnitOfWork>>) -> Option<Self> {
-        match binding {
-            Some(binding) => Some(Self::Bound(Arc::clone(binding))),
-            None => socket_executor().map(Self::Installed),
+/// `socket`, served at `served_at`, run as a
+/// [`Pool`](nest_rs_database::TransactionPolicy::Pool) unit of the app's
+/// `binding`, so a DataLoader batch its operations continue into reaches that
+/// binding's pool too. Never what the upgrade ran on: its transaction settles
+/// with the `101`, and kept on an hours-long socket it would pin a pooled
+/// connection behind a transaction nobody commits.
+fn on_the_pool<'a>(
+    binding: Arc<dyn nest_rs_database::UnitOfWork>,
+    socket: crate::BoxFuture<'a, ()>,
+    served_at: ServedPath,
+) -> crate::BoxFuture<'a, ()> {
+    Box::pin(async move {
+        let unit = nest_rs_database::UnitSpec::new(
+            crate::unit::SUBSCRIPTION,
+            nest_rs_database::ExecutorScope::Request,
+            nest_rs_database::TransactionPolicy::Pool,
+        );
+        let served = socket.map(Ok);
+        let ran = nest_rs_database::run_unit(Some(&binding), unit, served, Result::is_ok, Err);
+        if let Err(why) = ran.await {
+            refused(&served_at, &why);
         }
-    }
-
-    /// `socket`, served at `served_at`, run on this data layer.
-    fn serve<'a>(
-        self,
-        socket: crate::BoxFuture<'a, ()>,
-        served_at: ServedPath,
-    ) -> crate::BoxFuture<'a, ()> {
-        match self {
-            Self::Bound(binding) => Box::pin(async move {
-                let unit = nest_rs_database::UnitSpec::new(
-                    crate::unit::SUBSCRIPTION,
-                    nest_rs_database::ExecutorScope::Request,
-                    nest_rs_database::TransactionPolicy::Pool,
-                );
-                let served = socket.map(Ok);
-                let ran =
-                    nest_rs_database::run_unit(Some(&binding), unit, served, Result::is_ok, Err);
-                if let Err(why) = ran.await {
-                    refused(&served_at, &why);
-                }
-            }),
-            Self::Installed(executor) => Box::pin(
-                nest_rs_database::__private::with_request_executor(executor, socket),
-            ),
-        }
-    }
+    })
 }
 
 /// A binding that refused the socket at `served_at` its pool: the socket closes
@@ -131,7 +95,8 @@ fn refused(served_at: &ServedPath, why: &nest_rs_database::Unhonoured) {
 }
 
 /// The identity a socket runs under — id and actor — taken from the **upgrade
-/// request**, as [`socket_executor`] is; nothing on the socket re-authenticates.
+/// request**, on its task, before the `101` is answered; nothing on the socket
+/// re-authenticates.
 fn socket_correlation() -> Correlation {
     Correlation::inherited()
 }
@@ -371,13 +336,13 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let served_at = ServedPath::of(&req);
         // What the upgrade's guards attached reaches the socket the way it
         // reaches a POST: forwarded by the seeds, carried by the connection.
-        // Never the upgrade's scope nor its transaction: the socket's own
-        // executor is installed below.
+        // Never the upgrade's scope nor its executor: the socket runs on the
+        // binding's pool, installed below, or bare in an app binding none.
         let data = self.bridge.connection_data(&req);
         let carried = RequestContinuation::capture(Continuation::Connection);
         let executor = self.executor.clone();
         let bounds = self.bounds;
-        let socket_data = SocketData::of_upgrade(self.unit_of_work.as_ref());
+        let binding = self.unit_of_work.clone();
         // Read on the request task, before the `101` is answered.
         let correlation = socket_correlation();
         let sockets = self.sockets.clone();
@@ -434,8 +399,8 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                         None => served.await,
                     });
                 });
-                let served = match socket_data {
-                    Some(socket_data) => socket_data.serve(serving, pool_served_at),
+                let served = match binding {
+                    Some(binding) => on_the_pool(binding, serving, pool_served_at),
                     None => serving,
                 };
                 // Dropped at the window's close, which `line`'s `Drop` files `cancelled`.
@@ -1085,7 +1050,6 @@ impl Line for SubscriptionLine {
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::sync::Arc;
 
     use super::*;
@@ -1190,39 +1154,51 @@ mod tests {
         );
     }
 
-    /// A request's lazy transaction handle, stepping out onto the pool.
+    /// The handle a request's unit installs: it holds a transaction.
     struct Transaction;
-    /// The pool handle it steps out onto.
+    /// The handle a pool unit installs.
     struct Pool;
 
     impl nest_rs_database::Executor for Transaction {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
         }
-        fn non_transactional(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
-            Some(Arc::new(Pool))
+    }
+
+    impl nest_rs_database::HeldTransaction for Transaction {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on the upgrade's transaction")
+        }
+
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            unreachable!("no test opens a savepoint on the upgrade's transaction")
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 
     impl nest_rs_database::Executor for Pool {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Pool(self)
         }
     }
 
-    #[tokio::test]
-    async fn a_socket_never_carries_the_upgrades_transaction() {
-        let captured =
-            nest_rs_database::__private::with_request_executor(Arc::new(Transaction), async {
-                socket_executor()
-            })
-            .await;
+    impl nest_rs_database::HeldPool for Pool {
+        fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            unreachable!("no test opens a block on the socket's pool")
+        }
 
-        let captured = captured.expect("the upgrade runs inside the request boundary");
-        assert!(
-            captured.as_any().is::<Pool>(),
-            "the socket runs on the pool, not on the request transaction",
-        );
+        fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+            None
+        }
+    }
+
+    /// Whether the ambient executor holds the pool double.
+    fn on_the_pool_double() -> bool {
+        nest_rs_database::current_executor()
+            .is_some_and(|executor| executor.holds().downcast_ref::<Pool>().is_some())
     }
 
     #[tokio::test]
@@ -1250,25 +1226,6 @@ mod tests {
     async fn a_socket_with_no_upgrade_to_inherit_from_starts_its_own_trace() {
         assert!(nest_rs_core::current_trace_id().is_none());
         assert!(socket_correlation().actor_id().is_none());
-    }
-
-    #[tokio::test]
-    async fn a_socket_keeps_a_handle_that_is_already_the_pool() {
-        let captured = nest_rs_database::__private::with_request_executor(Arc::new(Pool), async {
-            socket_executor()
-        })
-        .await;
-
-        assert!(
-            captured.is_some_and(|executor| executor.as_any().is::<Pool>()),
-            "an upgrade on a safe method already holds the pool — keep it",
-        );
-    }
-
-    #[tokio::test]
-    async fn a_socket_without_an_orm_carries_nothing() {
-        assert!(socket_executor().is_none());
-        assert!(SocketData::of_upgrade(None).is_none());
     }
 
     /// A binding opening the request's transaction, or the pool.
@@ -1308,37 +1265,15 @@ mod tests {
     #[tokio::test]
     async fn a_batch_under_a_socket_runs_on_the_pool_of_the_upgrades_binding() {
         let binding: Arc<dyn nest_rs_database::UnitOfWork> = Arc::new(Binding);
-        let upgrade = nest_rs_database::UnitSpec::new(
-            crate::unit::OPERATION,
-            nest_rs_database::ExecutorScope::Request,
-            nest_rs_database::TransactionPolicy::PerUnit,
-        );
-        let socket_data = nest_rs_database::run_unit(
-            Some(&binding),
-            upgrade,
-            async { SocketData::of_upgrade(Some(&binding)) },
-            |_| true,
-            |_| None,
-        )
-        .await
-        .expect("the upgrade runs inside its unit");
-
         let mut socket_ran_on_the_pool = false;
         let mut batch_ran_on = None;
-        let socket = socket_data.serve(
+        let socket = on_the_pool(
+            binding,
             Box::pin(async {
-                socket_ran_on_the_pool = nest_rs_database::current_executor()
-                    .is_some_and(|executor| executor.as_any().is::<Pool>());
+                socket_ran_on_the_pool = on_the_pool_double();
                 let batch = RequestContinuation::capture(Continuation::Batch)
                     .expect("a socket runs in a request scope");
-                batch_ran_on = Some(
-                    batch
-                        .scope(async {
-                            nest_rs_database::current_executor()
-                                .is_some_and(|executor| executor.as_any().is::<Pool>())
-                        })
-                        .await,
-                );
+                batch_ran_on = Some(batch.scope(async { on_the_pool_double() }).await);
             }),
             served_at(),
         );
@@ -1346,7 +1281,7 @@ mod tests {
 
         assert!(
             socket_ran_on_the_pool,
-            "the socket never carries the upgrade's transaction"
+            "the socket runs as a pool unit of the binding, never in a transaction"
         );
         assert_eq!(
             batch_ran_on,

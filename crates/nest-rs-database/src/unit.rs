@@ -17,7 +17,7 @@ use crate::executor::{Executor, ExecutorScope, install_unit};
 
 /// What one unit of work is, as the edge running it declares it.
 ///
-/// It can grow within 7.x: build one through [`UnitSpec::new`] and its `with_`
+/// It can grow in a minor release: build one through [`UnitSpec::new`] and its `with_`
 /// methods, never a literal.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -69,7 +69,7 @@ impl UnitSpec {
 /// The job one attempt runs, as the port names it: the queue edge's identity,
 /// in no queue crate's types.
 ///
-/// It can grow within 7.x: build one through [`JobRef::new`].
+/// It can grow in a minor release: build one through [`JobRef::new`].
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobRef {
@@ -95,7 +95,7 @@ impl JobRef {
 /// How one unit's data-layer work is settled — for a job, declared on its
 /// decorator (`transactional = …`).
 ///
-/// It can grow within 7.x, so a driver's `match` keeps a `_` arm that refuses
+/// It can grow in a minor release, so a driver's `match` keeps a `_` arm that refuses
 /// the unit, answering [`Unhonoured::deterministic`]:
 ///
 /// ```compile_fail,E0004
@@ -242,7 +242,7 @@ pub trait OpenUnit: Send {
 
 /// How an [`OpenUnit`] settled.
 ///
-/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm —
+/// It can grow in a minor release, so a `match` outside this crate keeps a `_` arm —
 /// one that fails the unit, as [`run_unit`] does:
 ///
 /// ```compile_fail,E0004

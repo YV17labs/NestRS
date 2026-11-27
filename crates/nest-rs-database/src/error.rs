@@ -10,7 +10,7 @@ use nest_rs_core::__private::SaidFailure;
 /// serialization failure or a deadlock is retryable; a constraint violation is
 /// not, nor a commit whose outcome is *unknown*, which may have landed.
 ///
-/// It can grow within 7.x: read its fields, and build one through a
+/// It can grow in a minor release: read its fields, and build one through a
 /// constructor, never a literal:
 ///
 /// ```compile_fail,E0639
@@ -65,7 +65,7 @@ impl std::error::Error for Unhonoured {}
 
 /// Why the outbox could not keep a record, or hand one over.
 ///
-/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm.
+/// It can grow in a minor release, so a `match` outside this crate keeps a `_` arm.
 #[non_exhaustive]
 pub enum OutboxError {
     /// The store's table is not there; `remedy` says how to create it.
@@ -122,15 +122,16 @@ impl Error for OutboxError {
 /// Why an atomic block could not keep its promise.
 #[non_exhaustive]
 pub enum AtomicError {
-    /// No ambient executor, or one whose driver offers no atomic block: nothing
-    /// ran.
+    /// No ambient executor — outside any unit of work: nothing ran. Inside
+    /// one, every handle offers a block.
     Unsupported,
     /// The database refused to settle the block — its `RELEASE` or
     /// `ROLLBACK TO`, or the `COMMIT` of a block that is a transaction of its
     /// own — and nothing it wrote stands. Inside a unit of work, that unit is
-    /// left unable to commit. A refused `SAVEPOINT` is not this: the block's
-    /// first statement fails with the database's error. The driver's error stays
-    /// for its own `match`, read as [`OutboxError::Database`]'s is.
+    /// left unable to commit; nested in another block, that block alone, which
+    /// can only roll back. A refused `SAVEPOINT` is not this: the block's first
+    /// statement fails with the database's error. The driver's error stays for
+    /// its own `match`, read as [`OutboxError::Database`]'s is.
     Database(Box<dyn std::error::Error + Send + Sync>),
     /// The work returned `Ok` over a statement that failed inside it: nothing
     /// it wrote stands.

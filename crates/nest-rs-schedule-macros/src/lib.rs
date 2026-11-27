@@ -25,8 +25,17 @@ mod scheduled;
 ///
 /// A trigger's method borrows its host (`&self`, or `self: &Arc<Self>`) and
 /// takes nothing else, declares no type or const parameter, and returns
-/// `anyhow::Result<()>`, whose `Err` fails the occurrence. It may be `async` or
-/// not; only an `async` one is awaited.
+/// `Result<(), E>` for an `E` converting into `anyhow::Error` —
+/// `anyhow::Result<()>`, or an error of its own such as a `thiserror` type —
+/// read by its type, so an alias reads as the type it names. An `Err` fails
+/// the occurrence, converted as `?` converts it. A box is no
+/// `std::error::Error`, `Send + Sync` or not, so it does not convert: make it a
+/// `Box<dyn Error + Send + Sync>` and map it with `anyhow::Error::from_boxed`.
+/// An `anyhow::Error` owns its error, so one borrowing the host does not
+/// convert either, and rustc refuses it with its own lifetime error rather than
+/// a sentence of the framework's. A method that never answers returns `!`, read
+/// by its type as any answer is, and its occurrence ends as its body ends it. It
+/// may be `async` or not; only an `async` one is awaited.
 ///
 /// `#[every]` and `#[cron]` take `replicas = "one"` to fire each occurrence on
 /// one replica of the app rather than on every one: the replica that claims it

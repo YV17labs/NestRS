@@ -319,3 +319,29 @@ The `200`'s sentence the 2026-11-08 entry kept on an entity's posture is gone: w
 withhold is the row's to say, on each such property of its schema, whatever the posture names
 (`mask-provenance.md`, this date). `names_an_entity` keeps one reader in the document, the
 `403` an entity's posture can answer.
+
+## 2026-11-26 — no parameter's type is read for a posture
+
+A route's reads were withheld unless its posture named a subject *or* a parameter's type
+armed a `RouteResponseShaper`: `#[routes]` probed every parameter's type for one, so a
+type implementing the trait — any crate's, `capture` answering `None` — opened a route
+with no posture to the scoped reads of its guards' ability. Two routes under the same
+`#[use_guards(CallerGuard, AbilityGuard<Rules>)]`, neither declaring a posture, answered
+`current_ability().is_some()` `false` and `true`, the second taking such a parameter.
+The hard "no" of CLAUDE.md, posture declared by a parameter type, broken by the
+mechanism this entry's predecessors kept for the gate alone.
+
+The security value decided, the class made unrepresentable rather than refused: the
+posture's class gate is `nest_rs_authz::class_gate::<A, S>`, which `#[routes]` emits
+from the decorator as `#[operations]`, `#[messages]` and `#[tools]` do, and whether it
+names an entity is read off `S: Subject`. No parameter's type is probed for either.
+`RouteResponseShaper`, `ResponseShaping`, `RouteFuture`, `ShapedEndpoint`, the probe and
+`nest_rs_authz::http::Authorize` go: `Authorize<A, S>` was their only implementer, its
+`capture` answered `None`, and the shaping seam wrapped every route for nothing. The two
+boot refusals that guarded the probe (a gate a parameter's type declared, a shaper on an
+`#[sse]` route) go with what they refused; the stream's posture keeps its compile-time
+refusal, read off the subject.
+
+**Refused:** keeping the trait and refusing its implementation outside the framework
+(sealed): a seal holds one crate's word, and a probe over parameter types is the shape
+the hard "no" forbids, whoever implements the trait.

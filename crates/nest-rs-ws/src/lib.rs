@@ -86,9 +86,10 @@
 //!   `{ "event": "<event>", "data": { "error": "…", "code": "…", … } }`, said
 //!   by `e`'s **type**: a [`WsError`] as built; a
 //!   [`ToProblem`](nest_rs_core::ToProblem) error as the problem it says
-//!   ([`WsError::from_problem`]); a `Problem`, a pipe rejection or a decode
-//!   failure its chain carries, in its own form, without a decode failure's
-//!   value; anything else as
+//!   ([`WsError::from_problem`]); a `Problem` its chain carries, a pipe
+//!   rejection's among them, in its own form; anything else — a decode failure
+//!   among them, which a handler says is its client's with
+//!   `Problem::from(DecodeError::from(e))` — as
 //!   [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE) under the
 //!   `INTERNAL` code, the frame every failure the client is not told of
 //!   answers.

@@ -102,7 +102,7 @@ mod tests {
             "2026-00-10",
             "2026-1-01",
             "26-10-08",
-            "v7.1",
+            "v2.1",
         ] {
             assert_eq!(full_date_epoch(bad), None, "{bad}");
         }
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn a_since_that_is_no_date_is_refused_naming_the_header() {
-        let err = deprecation_header(&parse_quote!("7.1"))
+        let err = deprecation_header(&parse_quote!("2.1"))
             .expect_err("a version is no date")
             .to_string();
         assert!(
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn rusts_deprecated_is_refused_naming_the_route_form() {
         let method: syn::ImplItemFn = parse_quote! {
-            #[deprecated(since = "7.1.0")]
+            #[deprecated(since = "2.1.0")]
             async fn list(&self) {}
         };
         let err = refuse_rust_deprecated(&method.attrs, "a `#[routes]` handler")

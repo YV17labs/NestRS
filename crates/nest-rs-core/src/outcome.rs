@@ -162,6 +162,16 @@ pub(crate) mod __private {
         }
     }
 
+    /// Whether `failure` answers a `503` — the problem an exception filter
+    /// answered it with, else the one its chain carries: the server could not
+    /// serve the unit in time, a dependency refused or past its net, which an
+    /// edge files at `warn` as it files the `503` it answers a client.
+    pub fn is_unavailable(failure: &Failure) -> bool {
+        caught_problem(failure)
+            .or_else(|| failure.find::<Problem>())
+            .is_some_and(|problem| problem.status() == 503)
+    }
+
     /// A second handle on `failure`, sharing its error: what an edge keeps of
     /// the failure it rendered, to tell it later from one a layer put in its
     /// place. Held, it keeps the error alive, so no later failure takes its

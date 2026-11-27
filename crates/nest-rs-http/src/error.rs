@@ -18,7 +18,7 @@ use crate::HttpConfig;
 use crate::endpoint_guards::NO_GUARD_REMEDY;
 use crate::headers::one_of;
 use crate::origin::OriginScheme;
-use crate::problem::{ProblemDetails, problem_response, status_of};
+use crate::problem::{ProblemDetails, problem_response, refusal_response, status_of};
 use crate::response::{IntoResponse, Response};
 
 /// Any error, boxed: a body's, or the cause an [`HttpError`] carries.
@@ -82,6 +82,10 @@ impl ResponseError for BodyError {
             Self::AlreadyTaken => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NotUtf8 | Self::Io(_) => StatusCode::BAD_REQUEST,
         }
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -148,14 +152,15 @@ pub trait ResponseError {
     /// The status this error answers.
     fn status(&self) -> StatusCode;
 
-    /// The response this error answers: by default an RFC 9457 problem document
-    /// of its status, whose `detail` on a `4xx` is the error's sentence said
-    /// without any value it quotes, and which a `5xx` answers without one.
+    /// The response this error answers: by default its status's RFC 9457
+    /// problem document, with no `detail`. An error's `Display` is the
+    /// operator's, never the client's: a sentence for the client is written
+    /// here, or as a [`Problem`]'s through [`ToProblem`].
     fn as_response(&self) -> Response
     where
         Self: Error + Send + Sync + Sized + 'static,
     {
-        ProblemDetails::answering(self.status(), self).into_response()
+        ProblemDetails::from_status(self.status()).into_response()
     }
 }
 
@@ -237,7 +242,7 @@ enum Cause {
     Status,
     /// A response answered as it is.
     Response(Response),
-    /// An error rendered as a problem document of the status.
+    /// An error kept for the operator beneath its status's problem document.
     Error(BoxError),
     /// An error rendering itself: a [`ResponseError`] by its own
     /// `as_response`, a [`ToProblem`] error by the problem it says.
@@ -252,9 +257,8 @@ impl Cause {
     /// response, which only its owner renders, answers its status's problem.
     fn rendered(&self, status: StatusCode) -> Response {
         match self {
-            Cause::Error(error) => ProblemDetails::answering(status, &**error).into_response(),
             Cause::Typed { error, render } => render(error, status),
-            Cause::Status | Cause::Response(_) => {
+            Cause::Error(_) | Cause::Status | Cause::Response(_) => {
                 ProblemDetails::from_status(status).into_response()
             }
         }
@@ -262,13 +266,18 @@ impl Cause {
 }
 
 impl HttpError {
-    /// `source` answering `status`.
+    /// `source` answering `status`'s problem document: `source` is kept as
+    /// the cause, and its `Display` never reaches the client. Behind a `5xx`
+    /// the edge files it for the operator; behind a `4xx` nothing does, and
+    /// an exception filter alone reads it. A sentence for the client is a
+    /// [`Problem`]'s [`with_detail`](Problem::with_detail).
     ///
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode};
     ///
-    /// let error = HttpError::new(std::fmt::Error, StatusCode::BAD_GATEWAY);
-    /// assert!(error.is::<std::fmt::Error>());
+    /// let refused = std::io::Error::other("the ledger at 10.0.0.3 refused");
+    /// let error = HttpError::new(refused, StatusCode::BAD_GATEWAY);
+    /// assert!(error.is::<std::io::Error>());
     /// ```
     pub fn new(source: impl Error + Send + Sync + 'static, status: StatusCode) -> Self {
         Self::with(status, Cause::Error(Box::new(source)))
@@ -417,12 +426,13 @@ impl HttpError {
     }
 
     /// The response this error answers: a ready response as it is, a
-    /// [`ResponseError`]'s own rendering, otherwise an RFC 9457 problem document
-    /// whose `detail` on a `4xx` is the cause's sentence said without any value
-    /// it quotes, and which a `5xx` answers without one. The extensions are
-    /// copied on last. What a `5xx` answer keeps from the client of it is filed
-    /// at once, naming no route: the edge renders a handler's error itself, and
-    /// names the route it answers.
+    /// [`ResponseError`]'s own rendering, otherwise its status's RFC 9457
+    /// problem document with no `detail`, whatever the status — a sentence for
+    /// the client is a [`Problem`]'s [`with_detail`](Problem::with_detail),
+    /// never a cause's `Display`. The extensions are copied on last. What a
+    /// `5xx` answer keeps from the client of it is filed at once, naming no
+    /// route: the edge renders a handler's error itself, and names the route
+    /// it answers.
     ///
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode, header};
@@ -534,7 +544,7 @@ impl HttpError {
             Cause::Typed { error, .. } => &**error,
             _ => self.chain()?,
         };
-        if chain.is::<Problem>() {
+        if nest_rs_core::__private::link_as::<Problem>(chain).is_some() {
             return None;
         }
         Withheld::behind(status.as_u16(), chain)
@@ -877,6 +887,16 @@ pub(crate) struct PathParameterError {
     pub(crate) name: std::sync::Arc<str>,
 }
 
+impl ResponseError for PathParameterError {
+    fn status(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
+    }
+}
+
 /// What [`Json`](crate::Json) refused.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum JsonError {
@@ -896,6 +916,10 @@ impl ResponseError for JsonError {
             Self::Malformed(_) => StatusCode::BAD_REQUEST,
         }
     }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
+    }
 }
 
 /// What [`Query`](crate::Query) refused: the query string is not what the type
@@ -907,6 +931,10 @@ pub(crate) struct QueryError(pub(crate) DecodeError);
 impl ResponseError for QueryError {
     fn status(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -935,6 +963,10 @@ impl ResponseError for FormError {
             Self::Malformed(_) => StatusCode::BAD_REQUEST,
         }
     }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
+    }
 }
 
 /// What [`Multipart`](crate::Multipart) refused.
@@ -956,6 +988,10 @@ impl ResponseError for MultipartError {
             Self::MediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Malformed(_) => StatusCode::BAD_REQUEST,
         }
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -1128,6 +1164,10 @@ impl ResponseError for PathError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         }
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -1583,13 +1623,12 @@ impl serde::de::Error for HeaderError {
 
 impl std::error::Error for HeaderError {}
 
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_h2) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_h2) }
 
 /// A GOAWAY error of h2's, said as h2 says it without the debug data its
 /// `Display` appends — the peer's own bytes; every other h2 error says nothing
-/// it was sent.
-fn say_h2(link: &(dyn Error + 'static)) -> Option<String> {
-    let error = link.downcast_ref::<h2::Error>()?;
+/// it was sent, and is left as it reads.
+fn say_h2(error: &h2::Error) -> Option<String> {
     if !error.is_go_away() {
         return None;
     }
@@ -1625,6 +1664,58 @@ mod tests {
     async fn problem_of(response: Response) -> serde_json::Value {
         let bytes = response.into_body().into_bytes().await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// What h2 ends a connection on when its peer says GOAWAY, quoting
+    /// `debug_data`.
+    async fn goaway(debug_data: &[u8]) -> h2::Error {
+        use tokio::io::AsyncWriteExt as _;
+
+        let (mut peer, io) = tokio::io::duplex(1024);
+        let mut frames = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
+        // An empty SETTINGS frame, then a GOAWAY: no stream, PROTOCOL_ERROR.
+        frames.extend_from_slice(&[0, 0, 0, 0x4, 0, 0, 0, 0, 0]);
+        let length = u8::try_from(8 + debug_data.len()).expect("one byte of length");
+        frames.extend_from_slice(&[0, 0, length, 0x7, 0, 0, 0, 0, 0]);
+        frames.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0x1]);
+        frames.extend_from_slice(debug_data);
+        peer.write_all(&frames).await.expect("the frames are sent");
+
+        let mut connection = h2::server::handshake(io)
+            .await
+            .expect("the preface is read");
+        let Some(Err(error)) = connection.accept().await else {
+            panic!("the connection ends on the GOAWAY");
+        };
+        error
+    }
+
+    /// `std` makes a pointer to an error an error displaying the one it
+    /// holds: an error naming h2's as its source behind one hands out the
+    /// pointer, said as the error it holds.
+    #[tokio::test]
+    async fn a_goaway_named_as_a_source_behind_a_pointer_is_said_without_its_debug_data() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the call failed")]
+        struct Naming<S: Error + 'static>(#[source] S);
+
+        let quoting = goaway(b"sk_live_quoted").await;
+        assert!(quoting.to_string().contains("sk_live"), "{quoting}");
+        let erased: std::sync::Arc<dyn Error + Send + Sync> =
+            std::sync::Arc::new(goaway(b"sk_live_quoted").await);
+        for said in [
+            nest_rs_core::error_message(&Naming(quoting)),
+            nest_rs_core::error_message(&Naming(std::sync::Arc::new(
+                goaway(b"sk_live_quoted").await,
+            ))),
+            nest_rs_core::error_message(&Naming(Box::new(goaway(b"sk_live_quoted").await))),
+            nest_rs_core::error_message(&Naming(erased)),
+        ] {
+            assert_eq!(
+                said,
+                "the call failed: connection error received: unspecific protocol error detected"
+            );
+        }
     }
 
     /// A handshake refused for the protocol its connection speaks answers
@@ -1699,11 +1790,9 @@ mod tests {
         );
         let problem = problem_of(rendered).await;
         assert_eq!(problem["status"], 400);
-        let detail = problem["detail"].as_str().unwrap();
-        assert!(detail.contains("invalid type"), "{detail}");
         assert!(
-            !detail.contains("hunter2"),
-            "a 4xx detail never quotes the value: {detail}"
+            problem.get("detail").is_none(),
+            "a cause is the operator's, a 4xx's included: {problem}"
         );
 
         let failure = std::io::Error::other("connection to db-primary refused");

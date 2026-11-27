@@ -1,0 +1,14 @@
+error: #[resilient] decorates an `async fn` method with a body, run under the policy a field of `self` holds, and `status` is declared with none, as a trait declares a method: there is no body to run, and no field of `self` to read — put `#[resilient]` on the method of each impl
+  --> tests/integration/diagnostics/resilience/resilient_on_a_trait_declaration.rs:26:14
+   |
+26 |     async fn status(&self, parcel: &str) -> Answer<usize>;
+   |              ^^^^^^
+
+error[E0609]: no field `carrier` on type `&Self`
+  --> tests/integration/diagnostics/resilience/resilient_on_a_trait_declaration.rs:28:17
+   |
+24 | trait Tracking {
+   | -------------- type parameter 'Self' declared here
+...
+28 |     #[resilient(carrier)]
+   |                 ^^^^^^^ unknown field

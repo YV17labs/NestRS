@@ -4,7 +4,8 @@
 //! third-party path (`::anyhow`, `::tracing`, …) or a framework crate's own root
 //! (`::nest_rs_http`) emitted by any decorator used here fails this crate's
 //! compile; its suite pins each decorator's refusals through the umbrella, as a
-//! developer meets them.
+//! developer meets them. `forbidden_lints` holds the same for a lint a
+//! developer forbids: an expansion neither allows nor trips one there.
 //!
 //! Each witness compiles under its capability's feature alone, mirroring the
 //! umbrella's features; the kernel's decorators compile under none. Extend this
@@ -30,6 +31,7 @@ pub mod endpoint;
 #[cfg(feature = "seaorm")]
 pub mod entity;
 pub mod entry;
+pub mod forbidden_lints;
 #[cfg(feature = "ws")]
 pub mod gateway;
 #[cfg(feature = "testing")]
@@ -59,6 +61,8 @@ pub mod redis_queue;
 pub mod redis_schedule;
 #[cfg(feature = "redis-throttler")]
 pub mod redis_throttler;
+#[cfg(feature = "resilience")]
+pub mod resilient;
 #[cfg(feature = "graphql")]
 pub mod resolver;
 #[cfg(feature = "authn")]

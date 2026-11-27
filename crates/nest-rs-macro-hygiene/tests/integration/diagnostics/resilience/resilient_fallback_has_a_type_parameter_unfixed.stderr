@@ -1,0 +1,23 @@
+error: #[resilient] `fallback` takes the name of an `async fn` method of `Self`, alone, e.g. `fallback = stale` — it takes no type argument: a fallback is handed the method's arguments, then the error, and answers what the method answers, so name one whose type parameters those fix
+  --> tests/integration/diagnostics/resilience/resilient_fallback_has_a_type_parameter_unfixed.rs:52:37
+   |
+52 |     #[resilient(carrier, fallback = stale::<u8>)]
+   |                                     ^^^^^^^^^^^
+
+error[E0283]: type annotations needed
+  --> tests/integration/diagnostics/resilience/resilient_fallback_has_a_type_parameter_unfixed.rs:46:37
+   |
+46 |     #[resilient(carrier, fallback = stale)]
+   |                                     ^^^^^ cannot infer type of the type parameter `T` declared on the method `stale`
+   |
+   = note: the type must implement `std::default::Default`
+note: required by a bound in `ShipmentsService::stale`
+  --> tests/integration/diagnostics/resilience/resilient_fallback_has_a_type_parameter_unfixed.rs:32:23
+   |
+31 | impl ShipmentsService {
+32 |     async fn stale<T: Default>(&self, _zone: &str, _error: ResilienceError<CarrierDown>) -> Answer {
+   |                       ^^^^^^^ required by this bound in `ShipmentsService::stale`
+help: consider specifying a concrete type for the type parameter `T`
+   |
+46 |     #[resilient(carrier, fallback = stale::</* Type */>)]
+   |                                          ++++++++++++++

@@ -8,9 +8,9 @@ This file is the map. The rules for a part of the tree live in
 `.claude/rules/` and load with the files they cover (`architecture.md` always);
 `.claude/decisions/` holds why a design was chosen and what was refused — read
 the entry a rule cites before re-proposing what it refused.
-`.claude/upstream/` holds what a third-party library gets wrong that we work
-around or document, with the ticket to file — read a library's file when its
-version moves.
+`.claude/upstream/` holds what a third-party library or the toolchain gets wrong
+that we work around or document, with the ticket to file — read a library's file
+when its version moves, `rustc.md` when `rust-toolchain.toml`'s pin does.
 
 ## Identity — read first, decide with it
 
@@ -69,7 +69,7 @@ lists.
 - `bench/` — the standalone HTTP benchmark, nestrs against other frameworks on
   one contract. `docs/` — nestrs.dev.
   `changelog/` — one file per minor line, indexed by `CHANGELOG.md`.
-  `ROADMAP.md` — what 7.x may add next and what would force 8.0; read it
+  `ROADMAP.md` — what may be added next and what forces a major; read it
   before proposing a capability, and start none it lists without the owner's yes.
 
 ```bash
@@ -82,18 +82,26 @@ just ci     # every check CI runs: lint, docs and tests
 ## How we work
 
 - A bug starts with a failing test that reproduces it; the fix covers its
-  cause and its family. A feature that changes the public API or touches a
-  decision here is agreed with the owner first.
+  cause and its family. A new capability, or a change to a decision here, is
+  agreed with the owner first.
+- **Compatibility never holds a design back.** What makes the framework
+  considerably faster, safer or simpler is built whatever it breaks, and a rule
+  or a decision refusing it for compatibility alone is changed with it. Such a
+  break is never asked and always told: the commit, the changelog's upgrading
+  entry, the report (`decisions/semver.md`, 2026-11-25).
 - Branch `<type>/<slug>`, Conventional Commit subjects stating what is now
   true. `just ci` green before a branch reaches the owner's. Push, tag,
   publish and anything posted outside are the owner's.
-- **Ask the owner only for** a hard "no", a decision recorded here, a public
-  API break, a migration dropping or rewriting data, or anything leaving the
-  machine. Decide other trade-offs on performance, security and the standards,
-  with the evidence. **A dependency is decided, never asked**: the market's
-  standard for the job in its year — stable, maintained, within the freshness
-  bar (`manifests-ci.md`) — is taken, and the commit body says why it is that
-  one.
+- **Ask the owner only for** a hard "no", a decision recorded here, a migration
+  dropping or rewriting data, or anything leaving the machine. Decide other
+  trade-offs on performance, security and the standards, with the evidence. **A
+  dependency is decided, never asked**: the market's standard for the job in its
+  year — stable, maintained, within the freshness bar (`manifests-ci.md`) — is
+  taken, and the commit body says why it is that one. A report hands the owner
+  no list to settle: what this file answers is decided and said with the value
+  that decided it, and a security hole found anywhere is fixed, never asked.
+- Work not yet released names no release number: the owner numbers a release
+  when cutting it (`manifests-ci.md`, *Semver*).
 - A red check belongs to the change that turned it red: fixed at once or
   reverted. Code and a rule that drift: the code wins and the rule is fixed in
   that commit, unless the rule is a security invariant or a hard "no".
@@ -154,10 +162,10 @@ A name and its path say the same thing, and a name is judged in its set.
   `nest_rs_codegen::__private::pair::ALL`), and no two for one concern.
 - No second way to configure a module: `Module::for_root(x)`, one value, an
   opaque `*Setup` — no builder chain, other constructor or env-only `#[config]`.
-- No breaking change inside a major (what is API: `manifests-ci.md`,
-  *Semver*, which also holds its one exception, a security fix refusing an
-  insecure configuration); the API a break replaces goes in that major, never
-  kept as an alias. A detector for persisted data is not a shim.
+- No API kept as an alias of the one replacing it: a break goes whole, in one
+  change, and the release holding it is a major (what is API, and the one break
+  a patch takes, a security fix refusing an insecure configuration:
+  `manifests-ci.md`, *Semver*). A detector for persisted data is not a shim.
 - No feature flag for a capability not built, no umbrella module re-exporting
   every edge of a feature, no mocked database in a test.
 - No third-party crate without a release in about 12 months, no version

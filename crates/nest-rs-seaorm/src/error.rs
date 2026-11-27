@@ -4,7 +4,7 @@
 //! A database failure is classified once, here ([`RepoError`]), and said once:
 //! by its SQLSTATE and the names the server reported, never by the server's
 //! message or its `detail`, which quote the input it refused. This crate's
-//! [`SafeLink`](nest_rs_core::SafeLink) says a sea-orm or sqlx error a chain
+//! [`SafeLink`](nest_rs_core::SafeLink)s say a sea-orm or sqlx error a chain
 //! still holds the same way.
 
 use std::borrow::Cow;
@@ -315,8 +315,8 @@ impl From<AtomicError> for ServiceError {
 /// # assert!(signing_up(Ok(())).is_ok());
 /// ```
 ///
-/// A variant the server raised carries its [`Diagnostics`]; it can grow within
-/// 7.x, so a `match` outside this crate keeps a `_` arm.
+/// A variant the server raised carries its [`Diagnostics`]; it can grow in a
+/// minor release, so a `match` outside this crate keeps a `_` arm.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum RepoError {
@@ -592,19 +592,25 @@ pub(crate) fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)
     }
 }
 
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_db) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_runtime) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_sqlx) }
 
-/// What a sea-orm or sqlx error means, said without a value: a server error by
-/// its SQLSTATE and the names it reported; a variant whose text can hold a value
+/// What a sea-orm error means, said without a value: a server error by its
+/// SQLSTATE and the names it reported; a variant whose text can hold a value
 /// by its kind alone; every other by its own sentence, which holds none.
-fn say(link: &(dyn std::error::Error + 'static)) -> Option<String> {
-    if let Some(err) = link.downcast_ref::<DbErr>() {
-        return Some(said_db(err));
-    }
-    if let Some(err) = link.downcast_ref::<RuntimeErr>() {
-        return Some(said_runtime(err));
-    }
-    link.downcast_ref::<SqlxError>().map(said_sqlx)
+fn say_db(err: &DbErr) -> Option<String> {
+    Some(said_db(err))
+}
+
+/// sea-orm's runtime error, said as [`say_db`] says the error holding one.
+fn say_runtime(err: &RuntimeErr) -> Option<String> {
+    Some(said_runtime(err))
+}
+
+/// An sqlx error a chain holds bare, said the same way.
+fn say_sqlx(err: &SqlxError) -> Option<String> {
+    Some(said_sqlx(err))
 }
 
 fn said_db(err: &DbErr) -> String {
@@ -1998,6 +2004,61 @@ pub(crate) mod tests {
         assert!(displayed.contains("secret-123"), "{displayed}");
         let redacted = nest_rs_core::DecodeError::redact(&displayed, Some(&error));
         assert_eq!(redacted, "Execution Error: database error 22P02");
+    }
+
+    /// `std` makes a pointer to an error an error displaying the one it
+    /// holds: an error naming a database error as its source behind one hands
+    /// out the pointer, said as the error it holds.
+    #[test]
+    fn a_database_error_named_as_a_source_behind_a_pointer_is_said_the_same_way() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the import failed")]
+        struct Naming<S: std::error::Error + 'static>(#[source] S);
+
+        const SAID: &str = "the import failed: Execution Error: database error 22P02";
+        assert_eq!(error_message(&Naming(bad_uuid())), SAID);
+        assert_eq!(error_message(&Naming(Arc::new(bad_uuid()))), SAID);
+        assert_eq!(error_message(&Naming(Box::new(bad_uuid()))), SAID);
+        let erased: Arc<dyn std::error::Error + Send + Sync> = Arc::new(bad_uuid());
+        assert_eq!(error_message(&Naming(erased)), SAID);
+
+        let typed = || DbErr::Type("secret-123 is no uuid".to_owned());
+        assert!(typed().to_string().contains("secret-123"), "{}", typed());
+        for said in [
+            error_message(&Naming(typed())),
+            error_message(&Naming(Arc::new(typed()))),
+            error_message(&Naming(Box::new(typed()))),
+        ] {
+            assert_eq!(said, "the import failed: Type Error");
+        }
+        let DbErr::Exec(runtime) = bad_uuid() else {
+            panic!("an execution error");
+        };
+        assert_eq!(
+            error_message(&Naming(Arc::new(runtime))),
+            "the import failed: database error 22P02"
+        );
+    }
+
+    /// sea-orm hands its driver's error out behind an `Arc`, which an app
+    /// matching the variant keeps as its own error's source.
+    #[test]
+    fn a_driver_error_named_as_a_source_behind_a_pointer_is_said_as_one_named_bare() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the import failed")]
+        struct Naming<S: std::error::Error + 'static>(#[source] S);
+
+        const SAID: &str = "the import failed: database error 22P02";
+        let shared = || match bad_uuid() {
+            DbErr::Exec(RuntimeErr::SqlxError(driver)) => driver,
+            other => panic!("an execution error of the driver's: {other:?}"),
+        };
+        let owned = || Arc::into_inner(shared()).expect("held once");
+        assert!(shared().to_string().contains("secret-123"), "{}", shared());
+
+        assert_eq!(error_message(&Naming(owned())), SAID);
+        assert_eq!(error_message(&Naming(shared())), SAID);
+        assert_eq!(error_message(&Naming(Box::new(owned()))), SAID);
     }
 
     /// A rule's failure as `validator` hands it over: its parameters holding the

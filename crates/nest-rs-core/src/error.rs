@@ -20,7 +20,7 @@ use crate::type_name::shorten;
 /// its crate files, or one it carries ([`CarriesRemedy`](crate::CarriesRemedy)) —
 /// the refusal says that line.
 ///
-/// The boot builds it; a program reads its fields, and a later 7.x may add one:
+/// The boot builds it; a program reads its fields, and a later minor may add one:
 ///
 /// ```compile_fail,E0639
 /// let refused = nest_rs_core::AccessGraphError {
@@ -423,6 +423,27 @@ pub struct ContestedDeclarationError {
     pub second: String,
     /// What the reader should do instead, supplied by the declaring seam.
     pub remedy: &'static str,
+}
+
+/// Two functions claim one error type as its [`SafeLink`](crate::SafeLink),
+/// and one of them would be said in no line: which is asked first is link
+/// order. Raised where an [`App`](crate::App) is built, before any module
+/// collects.
+#[derive(Debug, Error)]
+#[error(
+    "contested safe link: `{link}` is claimed by two sayers — `{first}`, and `{second}`. A type \
+     has one sayer: drop one, or have the app's own claim an error type of its own that holds \
+     `{link}` as its source"
+)]
+#[non_exhaustive]
+pub struct ContestedSafeLinkError {
+    /// The error type claimed twice, as `std::any::type_name` spells it.
+    pub link: &'static str,
+    /// The function of the first entry read claiming it, by its path, which
+    /// names its crate.
+    pub first: &'static str,
+    /// The function of the entry that contested it, the same way.
+    pub second: &'static str,
 }
 
 /// Every factory left in the queue waits on a factory output still in it — one
@@ -1078,33 +1099,16 @@ impl DecodeError {
         self
     }
 
-    /// The report of the first decode failure in `error`'s chain, `error`
-    /// itself first, down to an opaque failure's cause: what an edge answers
-    /// for a failure it reads as one.
-    ///
-    /// ```
-    /// use nest_rs_core::DecodeError;
-    ///
-    /// #[derive(Debug, thiserror::Error)]
-    /// #[error("the stored profile is unreadable")]
-    /// struct Unreadable(#[source] serde_json::Error);
-    ///
-    /// let failure = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
-    /// let report = DecodeError::in_chain(&Unreadable(failure)).expect("a decode failure in the chain");
-    /// assert_eq!(report.to_string(), "invalid type: a string, expected u64 at line 1 column 16");
-    /// ```
-    pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<Self> {
-        crate::error_message::__private::answerable_links(error).find_map(Self::of)
-    }
-
-    /// `link` as the report it is, when it is a decode failure — serde_json's
-    /// error, or serde's own value error.
+    /// `link` as the report a line says it by, when it is a decode failure —
+    /// serde_json's error, or serde's own value error — or a pointer handed
+    /// out as the link holds one.
     pub(crate) fn of(link: &(dyn std::error::Error + 'static)) -> Option<Self> {
-        if let Some(error) = link.downcast_ref::<serde_json::Error>() {
+        use crate::error_message::__private::link_as;
+
+        if let Some(error) = link_as::<serde_json::Error>(link) {
             return Some(Self::new(error));
         }
-        link.downcast_ref::<serde::de::value::Error>()
-            .map(Self::from)
+        link_as::<serde::de::value::Error>(link).map(Self::from)
     }
 
     /// `text` said without the values a decode failure quotes in it — a reply's
@@ -1197,7 +1201,7 @@ impl Redactions {
         let mut text = Cow::Borrowed(text);
         for (displayed, said) in &self.0 {
             if text.contains(displayed.as_str()) {
-                text = Cow::Owned(text.replace(displayed.as_str(), said));
+                text = Cow::Owned(spelled_as(&text, displayed, said));
             }
         }
         // validator's wording first: a value it lists may spell what serde's
@@ -1213,6 +1217,27 @@ impl Redactions {
         };
         rebuilt.map_or(text, Cow::Owned)
     }
+}
+
+/// `text` with each `displayed` it spells said as `said`, but where `text`
+/// already spells `said` there: a sayer's sentence may go on from the link's
+/// own (`"…: 503 UNAVAILABLE"`), and a text built from the chain's message
+/// holds it whole.
+fn spelled_as(text: &str, displayed: &str, said: &str) -> String {
+    let mut spelled = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(displayed) {
+        spelled.push_str(&rest[..at]);
+        spelled.push_str(said);
+        let from = &rest[at..];
+        rest = &from[if said.starts_with(displayed) && from.starts_with(said) {
+            said.len()
+        } else {
+            displayed.len()
+        }..];
+    }
+    spelled.push_str(rest);
+    spelled
 }
 
 /// `text` within [`DecodeError::MAX_LEN`] bytes, cut at a character boundary,
@@ -1480,6 +1505,26 @@ mod decode_error_tests {
     use serde::Deserialize;
     use serde_json::json;
 
+    #[test]
+    fn a_link_spelled_is_said_whole_and_what_a_sentence_already_says_is_kept() {
+        use super::spelled_as;
+
+        assert_eq!(
+            spelled_as("x: refused; refused: 503", "refused", "refused: 503"),
+            "x: refused: 503; refused: 503"
+        );
+        assert_eq!(
+            spelled_as(
+                "rejected: secret, rejected: secret",
+                "rejected: secret",
+                "rejected"
+            ),
+            "rejected, rejected",
+            "a sentence shorter than the link's own leaves none of it"
+        );
+        assert_eq!(spelled_as("nothing", "rejected", "said"), "nothing");
+    }
+
     use super::*;
 
     #[derive(Debug, Deserialize)]
@@ -1684,6 +1729,25 @@ mod decode_error_tests {
             DecodeError::from(custom).to_string(),
             "a value its type does not accept"
         );
+    }
+
+    /// A message a `Deserialize` impl wrote is one no shape of serde's
+    /// rebuilds: behind a pointer too, it is read off the type.
+    #[test]
+    fn a_value_error_named_as_a_source_behind_a_pointer_is_said_as_one_named_bare() {
+        use std::sync::Arc;
+
+        use serde::de::value::Error as ValueError;
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("the form was refused")]
+        struct Naming<S: std::error::Error + 'static>(#[source] S);
+
+        let custom = || <ValueError as serde::de::Error>::custom("token ya29.secret refused");
+        let bare = crate::error_message(&Naming(custom()));
+        assert_eq!(bare, format!("the form was refused: {REFUSED_BY_ITS_TYPE}"));
+        assert_eq!(crate::error_message(&Naming(Arc::new(custom()))), bare);
+        assert_eq!(crate::error_message(&Naming(Box::new(custom()))), bare);
     }
 
     #[test]

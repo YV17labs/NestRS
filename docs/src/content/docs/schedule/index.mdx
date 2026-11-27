@@ -84,6 +84,14 @@ impl AudioTasks {
   [Firing once across replicas](/schedule/once/). A failure
   returns `Err`; it is logged and the schedule continues — one failed run
   never stops the job.
+- **The `Err` may be an error of your own**: a tick's `Result<(), E>` takes any
+  `E` that converts into `anyhow::Error`, so it can carry
+  [`#[resilient]`](/fundamentals/resilience/). That error borrows nothing of the
+  host, since an `anyhow::Error` owns its error. One borrowing it through
+  `&'a self` is refused at `#[scheduled]` in rustc's words, not the framework's:
+  `E0716` for an `async` method, `E0515` for one that is not.
+  A tick its policy refuses is reported failed and the next occurrence fires;
+  [what the line says](/schedule/ticks/#layers-around-a-tick).
 - **The cron method is thin.** Its only job is to decide *when* and
   *what payload* (here a synthetic file id). The plumbing — the object
   store, the `Jobs` handle, the queue — lives inside
@@ -253,8 +261,11 @@ decorator that declared it (`every`, `after` or `cron`), then one
 to — its `host`, `method`, `replicas`, `outcome` and `duration_ms`, and the
 `occurrence` a job firing once claimed. It is the same operation line every edge
 files once per unit of work, so `nest_rs::operation=off` in the log filter
-silences it with the others. A failed run adds one `scheduled job failed` line
-at `error`; the schedule keeps ticking.
+silences it with the others. A failed run adds one line, and the schedule
+keeps ticking: `scheduled job failed` at `error`, or at `warn` either
+`scheduled job failed; unavailable` for a `503`, what it runs on unable to
+serve it in time, or `scheduled job failed; a layer answered it` for a failure
+a layer answered ([Layers around a tick](/schedule/ticks/#layers-around-a-tick)).
 
 A bad cron **literal** never reaches boot — it fails `cargo build`:
 

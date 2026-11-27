@@ -57,7 +57,7 @@ callers must clear; the method's doc is the authority, not this list.
 - **`Repo::with_tombstones`** — the ability-scoped read that keeps
   soft-deleted rows: an administrator's view of deleted records, a retention
   job. Every other read hides them. It reads only: no `Repo` write un-deletes
-  a row (`Repo::restore` is planned for 7.x).
+  a row (`Repo::restore` is planned).
 - **A truly contextless path** — a one-shot command bootstrapped outside
   every unit of work — keeps an injected `Arc<DatabaseConnection>`, because no
   executor exists there. A lifecycle hook is a unit, and reaches `Repo` like
@@ -150,7 +150,7 @@ listeners each open a unit of their own through that binding) — and is dropped
 on a task handed to
 `TaskContext`, a connection's next message and a job's envelope, where a write
 opens a unit of its own. The ability crosses everywhere but a job's envelope.
-One exception is planned for 7.x: a mutation operation's batches on the
+One exception is planned: a mutation operation's batches on the
 operation's own transaction, joined before the field's savepoint settles.
 
 **The executor** is installed by each edge running its unit of work through
@@ -196,8 +196,9 @@ nothing: `Repo` reads no ability there as system work, wider than the one it hol
 ## What waits for the commit — the event and the job
 
 Only the unit of work holding the transaction knows whether its writes
-landed. `nest_rs_database::after_commit(work)` hands work to the ambient
-executor; every unit settles through its driver's `OpenUnit::settle` (SeaORM's
+landed. `nest_rs_database::after_commit(work)` hands work to the transaction
+the ambient executor holds (`HeldTransaction::after_commit`), and runs it at
+once on the pool; every unit settles through its driver's `OpenUnit::settle` (SeaORM's
 `LazyTransaction::finalize`), which runs it once the transaction committed (or
 the unit succeeded with nothing to roll back) and drops it on every other
 outcome; the unit's answer waits for it until the unit's deadline, never past
@@ -217,7 +218,8 @@ deadline**: opened through the binding its emitter ran under, the app's for an
 emitter under none (a task handed to `TaskContext`, whose listeners run under a
 request's scope and the ability it carried), bare in an app binding none, one
 transaction unless `transactional = false`, its `Err` rolled back and filed at `error` — at
-`warn` once a layer answered it — while the chain goes on — so an event a listener emits waits for that listener's commit. An open `EventBus::stream` reads the event at that same point, ahead of the listeners, and opens no unit.
+`warn` once a layer answered it, or for a `503` a filter answered or its chain
+carries — while the chain goes on — so an event a listener emits waits for that listener's commit. An open `EventBus::stream` reads the event at that same point, ahead of the listeners, and opens no unit.
 
 - **Waits:** every unit of its own — a mutating HTTP request, a GraphQL
   operation (a savepoint per mutation root field), a WS message or connection
@@ -247,13 +249,18 @@ transaction unless `transactional = false`, its `Err` rolled back and filed at `
   report `Ok` for work that may never be done. Inside a transaction it happens
   where it is written; work that must follow the commit is an event whose
   listener does it.
-- **Another ORM's driver** owes `Executor::after_commit` on every handle its
-  boundaries settle; the trait's default runs the work at once, which is right
-  for a pool only. What it holds runs under the `Commit` capture taken where
-  the work was registered, its own pool re-installed inside under the scope
-  read there (the trait method's rustdoc). It owes `write_outbox` on the same
-  handles, with an `OutboxStore` its binding binds beside the relay's module,
-  or its pushes are filed at once.
+- **Another ORM's driver** says of each handle what it holds
+  (`Executor::holds`): `Holds::Pool` or `Holds::Transaction`, each a trait with
+  no default method, so rustc lists what it leaves out. A transaction
+  (`HeldTransaction`) holds the work `after_commit` hands it, which runs under
+  the `Commit` capture taken where the work was registered, its own pool
+  re-installed inside under the scope read there (the trait method's rustdoc);
+  it opens the savepoint an atomic block and a resilience attempt run in, and
+  answers the `Outbox` a push is written into. The pool (`HeldPool`) opens an
+  atomic block's transaction of its own and answers the `OutboxKept` a cancel
+  reaches; the port runs `after_commit`'s work at once there. An outbox comes
+  with an `OutboxStore` its binding binds beside the relay's module; a handle
+  answering `None` keeps none, and its pushes are filed at once.
 
 ## What a create fills — the grants first, then the entity
 
@@ -466,8 +473,8 @@ The framework replays only what it knows rolled back (`retry.rs` holds the
 two predicates), so **a timeout is retryable only when it cut the body**: a
 commit that did not answer within the driver's settle net is in doubt
 (`Unhonoured::IN_DOUBT`), dead-lettered and reported `retryable=false`. **The promise is the transaction's, not the attempt's**:
-work stepped outside it — an HTTP call, `non_transactional` — is replayed with
-the body.
+work stepped outside it — an HTTP call, an S3 write — is replayed with the
+body.
 
 **The transaction bounds a retry, never a redelivery.** Delivery is at least
 once (`CLAUDE.md`, hard "no"), so a worker dying between `COMMIT` and recording

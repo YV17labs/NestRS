@@ -2,16 +2,19 @@
 //! dependency's breaker is open is answered `503` with the `Retry-After` the
 //! breaker knows, at once — whether the route answers the policy's error or a
 //! domain error of its own handing its problem on — and a failed call is
-//! answered opaquely.
+//! answered opaquely; the edge's line says which policy refused, by the
+//! instance it is named for, and the reply names none.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use http::StatusCode;
-use nest_rs_core::{Problem, ToProblem, code, module};
+use nest_rs_core::{Problem, ToProblem, code, injectable, instance, module};
 use nest_rs_http::{controller, routes};
-use nest_rs_resilience::{ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy};
-use nest_rs_testing::TestApp;
+use nest_rs_resilience::{
+    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+};
+use nest_rs_testing::{LogCapture, TestApp};
 
 /// What the dependency answers: a failure the route cannot describe.
 #[derive(Debug, thiserror::Error)]
@@ -47,7 +50,7 @@ impl PreviewsController {
     #[public]
     async fn direct(&self) -> Result<String, ResilienceError<UpstreamDown>> {
         self.upstream
-            .run(|_| async { Err::<String, _>(UpstreamDown) })
+            .run(|| async { Err::<String, _>(UpstreamDown) })
             .await
     }
 
@@ -55,7 +58,7 @@ impl PreviewsController {
     #[public]
     async fn wrapped(&self) -> Result<String, NoPreview> {
         self.upstream
-            .run(|_| async { Err::<String, _>(UpstreamDown) })
+            .run(|| async { Err::<String, _>(UpstreamDown) })
             .await
             .map_err(NoPreview)
     }
@@ -73,7 +76,7 @@ impl PreviewsController {
 )]
 struct PreviewsModule;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_open_breaker_is_answered_503_with_its_retry_after_and_a_failure_opaquely() {
     let app = TestApp::for_module::<PreviewsModule>()
         .await
@@ -98,6 +101,116 @@ async fn an_open_breaker_is_answered_503_with_its_retry_after_and_a_failure_opaq
             .get("code")
             .assert_string(code::UNAVAILABLE.as_str());
     }
+}
+
+/// The payment provider a checkout charges first.
+#[instance]
+struct Payments;
+
+/// The warehouse a checkout reserves its stock at once it is charged.
+#[instance]
+struct Warehouse;
+
+#[injectable]
+struct CheckoutService {
+    #[inject]
+    payments: Arc<ResiliencePolicy<Payments>>,
+    #[inject]
+    warehouse: Arc<ResiliencePolicy<Warehouse>>,
+}
+
+impl CheckoutService {
+    #[resilient(payments)]
+    async fn charge(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+        Ok(())
+    }
+
+    #[resilient(warehouse)]
+    async fn reserve(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+        Ok(())
+    }
+}
+
+#[controller(path = "/checkout")]
+struct CheckoutController {
+    #[inject]
+    svc: Arc<CheckoutService>,
+}
+
+#[routes]
+impl CheckoutController {
+    /// One handler, two dependencies: either policy's refusal is its answer.
+    #[get("/")]
+    #[public]
+    async fn checkout(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+        self.svc.charge().await?;
+        self.svc.reserve().await?;
+        Ok("reserved".to_owned())
+    }
+}
+
+#[module(
+    imports = [ResilienceModule<Payments>, ResilienceModule<Warehouse>],
+    providers = [CheckoutService, CheckoutController],
+)]
+struct CheckoutModule;
+
+/// Each policy of one handler refusing in turn: the line the edge files for
+/// its `503` says which one refused, by the instance its policy is named for,
+/// and the reply says neither — no instance and no mechanism.
+#[tokio::test(start_paused = true)]
+async fn the_edges_line_names_the_policy_that_refused_and_the_reply_none() {
+    const OPEN: Duration = Duration::from_secs(30);
+
+    let app = TestApp::for_module::<CheckoutModule>()
+        .await
+        .expect("a handler over two policies boots");
+    let container = app.container();
+    let payments = container
+        .get::<ResiliencePolicy<Payments>>()
+        .expect("the module built the payments policy");
+    let warehouse = container
+        .get::<ResiliencePolicy<Warehouse>>()
+        .expect("the module built the warehouse policy");
+    let logs = LogCapture::install();
+
+    payments.open_breaker(OPEN).expect("a breaker");
+    let charging = app.http().get("/checkout").send().await;
+    payments.close_breaker().expect("a breaker");
+    warehouse.open_breaker(OPEN).expect("a breaker");
+    let reserving = app.http().get("/checkout").send().await;
+
+    for refused in [charging, reserving] {
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        refused.assert_header("retry-after", "30");
+        let reply = refused
+            .json()
+            .await
+            .value()
+            .deserialize::<serde_json::Value>();
+        assert_eq!(reply["code"], code::UNAVAILABLE.as_str(), "{reply}");
+        for named in ["payments", "warehouse", "breaker"] {
+            assert!(!reply.to_string().contains(named), "`{named}` in {reply}");
+        }
+    }
+    let said: Vec<_> = logs
+        .find(nest_rs_http::target::HTTP, "request unavailable")
+        .iter()
+        .map(|line| line.field("error"))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            Some(
+                "the circuit breaker of the instance `payments` is open: 503 UNAVAILABLE"
+                    .to_owned()
+            ),
+            Some(
+                "the circuit breaker of the instance `warehouse` is open: 503 UNAVAILABLE"
+                    .to_owned()
+            ),
+        ]
+    );
 }
 
 /// A policy refusing every call but its first, which fails: what every edge
@@ -134,7 +247,7 @@ mod graphql {
         #[public]
         async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             self.upstream
-                .run(|_| async { Err::<String, _>(UpstreamDown) })
+                .run(|| async { Err::<String, _>(UpstreamDown) })
                 .await
         }
     }
@@ -145,7 +258,7 @@ mod graphql {
     )]
     struct PreviewGraphqlModule;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_open_breaker_is_a_field_error_saying_unavailable_and_its_wait() {
         let app = TestApp::for_module::<PreviewGraphqlModule>()
             .await
@@ -196,7 +309,7 @@ mod ws {
         #[public]
         async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             self.upstream
-                .run(|_| async { Err::<String, _>(UpstreamDown) })
+                .run(|| async { Err::<String, _>(UpstreamDown) })
                 .await
         }
     }
@@ -214,16 +327,26 @@ mod ws {
             .build_ws()
             .await
             .expect("a gateway over a policy boots on a real port");
+        let upstream = app
+            .container()
+            .get::<ResiliencePolicy>()
+            .expect("the module built the policy");
         let mut socket = app.socket("/ws/previews").connect().await;
 
         socket.send("preview", serde_json::Value::Null).await;
         let failed = socket.next_envelope().await;
         assert_eq!(failed["data"]["code"], "INTERNAL", "{failed}");
 
+        let most = crate::breaker_wait(&upstream);
         socket.send("preview", serde_json::Value::Null).await;
         let refused = socket.next_envelope().await;
+        let least = crate::breaker_wait(&upstream);
         assert_eq!(refused["data"]["code"], "UNAVAILABLE", "{refused}");
-        assert_eq!(refused["data"]["retryAfterSeconds"], 30, "{refused}");
+        let told = refused["data"]["retryAfterSeconds"].as_u64();
+        assert!(
+            told.is_some_and(|told| (least..=most).contains(&told)),
+            "the breaker's wait as it refused, {least} to {most} s: {refused}"
+        );
 
         app.shutdown().await.expect("the transport stops cleanly");
     }
@@ -256,7 +379,7 @@ mod mcp {
         #[public]
         async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             self.upstream
-                .run(|_| async { Err::<String, _>(UpstreamDown) })
+                .run(|| async { Err::<String, _>(UpstreamDown) })
                 .await
         }
     }
@@ -270,7 +393,7 @@ mod mcp {
     )]
     struct PreviewMcpModule;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_open_breaker_is_an_error_saying_unavailable_and_its_wait() {
         let app = TestApp::for_module::<PreviewMcpModule>()
             .await
@@ -286,7 +409,8 @@ mod mcp {
 }
 
 /// A job failing on an open breaker waits at least the breaker's `Retry-After`
-/// before its next attempt, through the problem its error's chain carries.
+/// before its next attempt, through the problem its error's chain carries, and
+/// one refused by a spent rate the rate's, up to an hour.
 mod queue {
     use std::sync::Arc;
     use std::time::Duration;
@@ -296,7 +420,7 @@ mod queue {
     use nest_rs_queue::{
         Capabilities, ProcessMethod, QueueBackend, QueueName, WIRE_FORMAT_VERSION, processor, queue,
     };
-    use nest_rs_resilience::{ResilienceError, ResiliencePolicy};
+    use nest_rs_resilience::{ResilienceConfig, ResilienceError, ResiliencePolicy};
     use serde::{Deserialize, Serialize};
 
     use super::{UpstreamDown, opening_on_the_first_failure};
@@ -322,7 +446,7 @@ mod queue {
         #[process(queue = PreviewsQueue, retries = 3)]
         async fn preview(&self, job: PreviewCommand) -> Result<(), ResilienceError<UpstreamDown>> {
             let _ = job;
-            self.upstream.run(|_| async { Err(UpstreamDown) }).await
+            self.upstream.run(|| async { Err(UpstreamDown) }).await
         }
     }
 
@@ -341,7 +465,7 @@ mod queue {
         consume::attempt(method, &mut delivery, container.clone(), None).await
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_job_failing_on_an_open_breaker_waits_at_least_its_retry_after() {
         let (_app, upstream) = crate::policy(opening_on_the_first_failure()).await;
         let container = Container::builder()
@@ -359,6 +483,36 @@ mod queue {
         assert!(
             after >= asked && after <= asked.mul_f64(1.2),
             "the breaker's wait, stretched by a fifth at most: {after:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_job_refused_by_a_spent_rate_waits_its_retry_after_up_to_an_hour() {
+        let window = Duration::from_secs(6 * 60 * 60);
+        let (_app, upstream) = crate::policy(ResilienceConfig {
+            rate_limit: Some(1),
+            rate_window: window,
+            ..crate::quiet()
+        })
+        .await;
+        let container = Container::builder()
+            .provide(PreviewProcessor { upstream })
+            .build()
+            .expect("the container builds");
+
+        let sent = attempted(&container).await;
+        assert!(
+            matches!(sent, AttemptOutcome::Retry { .. }),
+            "the window's one attempt, failed: {sent:?}"
+        );
+
+        let AttemptOutcome::Retry { after } = attempted(&container).await else {
+            panic!("a 503 another attempt may clear retries");
+        };
+        let hour = Duration::from_secs(60 * 60);
+        assert!(
+            after >= hour && after <= hour.mul_f64(1.2),
+            "an hour of the {window:?} the rate told, stretched by a fifth at most: {after:?}"
         );
     }
 }

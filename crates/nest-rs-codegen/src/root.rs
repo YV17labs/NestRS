@@ -137,6 +137,7 @@ const FRAMEWORK: &[FrameworkCrate] = &[
     row("nest_rs_opentelemetry", "opentelemetry", "opentelemetry"),
     row("nest_rs_openapi", "openapi", "openapi"),
     row("nest_rs_health", "health", "health"),
+    row("nest_rs_resilience", "resilience", "resilience"),
     row("nest_rs_throttler", "throttler", "throttler"),
     row("nest_rs_server_timing", "server_timing", "server-timing"),
     row("nest_rs_static_files", "static_files", "static-files"),
@@ -862,7 +863,7 @@ mod tests {
                 ::core::option::Option::Some(__v) => { ["2"].contains(&__v) }
                 ::core::option::Option::None => true,
             } {
-                __routes.route(Method::GET, &__path, ::nest_rs_authz::http::Authorize::new(ep));
+                __routes.route(Method::GET, &__path, ::nest_rs_authz::X::new(ep));
             };
         });
         assert!(

@@ -147,6 +147,12 @@ impl nest_rs_core::ToProblem for WarehouseDown {
     }
 }
 
+/// A failure to read the ledger's answer as a feature sharing it keeps it:
+/// serde_json's error is no `Clone`, so behind an `Arc`.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("the ledger's answer could not be read")]
+struct Unread(#[source] std::sync::Arc<serde_json::Error>);
+
 const WITHHELD: &str = "/mcp/withheld";
 
 #[mcp(path = "/mcp/withheld")]
@@ -175,6 +181,15 @@ impl WithheldTools {
     #[public]
     async fn unavailable(&self) -> Result<String, WarehouseDown> {
         Err(WarehouseDown)
+    }
+
+    /// Read the ledger's answer, which holds no number.
+    #[tool]
+    #[public]
+    async fn unread(&self) -> Result<String, Unread> {
+        serde_json::from_str::<u64>(&format!("\"{SECRET}\""))
+            .map(|settled| settled.to_string())
+            .map_err(|unread| Unread(std::sync::Arc::new(unread)))
     }
 }
 
@@ -324,6 +339,42 @@ async fn a_withheld_chain_is_filed_naming_its_operation() {
         assert_eq!(line.field("tool").as_deref(), Some(tool), "{tool}");
         assert_eq!(line.field("error").as_deref(), Some(chain), "{tool}");
     }
+}
+
+/// A decode failure a tool's error shares behind a pointer is no argument its
+/// caller sent: the call answers opaquely, never `INVALID_ARGUMENT`, and its
+/// chain is filed without the value.
+#[tokio::test]
+async fn a_decode_failure_shared_behind_a_pointer_is_answered_opaquely_and_filed() {
+    let app = TestApp::for_module::<WithheldModule>()
+        .await
+        .expect("the hosts boot");
+    let logs = LogCapture::install();
+
+    let body = nest_rs_testing::mcp::call_tool(app.http(), WITHHELD, "unread", None).await;
+    let answer = nest_rs_testing::mcp::result(&body);
+    assert_eq!(
+        answer["error"]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{answer}"
+    );
+    assert_eq!(
+        answer["error"]["data"],
+        serde_json::json!({ "code": nest_rs_core::code::INTERNAL.as_str() }),
+        "{answer}"
+    );
+
+    let line = logs.expect_one(nest_rs_mcp::TARGET, "mcp operation failed");
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("tool").as_deref(), Some("unread"));
+    assert_eq!(
+        line.field("error").as_deref(),
+        Some(
+            "the ledger's answer could not be read: invalid type: a string, expected u64 at line \
+             1 column 24"
+        ),
+    );
+    assert!(!format!("{body} {line:?}").contains(SECRET));
 }
 
 /// A failure an exception filter answers as the caller's files nothing of the

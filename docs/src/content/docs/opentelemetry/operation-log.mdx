@@ -154,7 +154,7 @@ a JSON-RPC code the MCP conventions name the caller's (`-32700`, `-32600`,
 `-32601`, `-32602`, `-32002`) its code alone. A WebSocket message, a GraphQL
 operation or root field and a graphql-ws socket the protocol refused have no such
 code, so a failure their caller earned records nothing: a `4xx` problem, a denial,
-a decode failure, an unknown event, a document validation refused, a `WsError` or
+a payload that does not decode, an unknown event, a document validation refused, a `WsError` or
 an `async_graphql::Error` of your own. Their line still files `outcome="error"`,
 and a `5xx`, a panic, a stop or a deadline's cut records as above; a failure of the
 server's own answered in your own words names no status, so spell it with a `5xx`

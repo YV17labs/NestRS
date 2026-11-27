@@ -1,0 +1,17 @@
+error: #[resilient] takes no `rate_limit`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_LIMIT`, or `ResilienceConfig::rate_limit` in code
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting_first.rs:38:17
+   |
+38 |     #[resilient(rate_limit = 5)]
+   |                 ^^^^^^^^^^
+
+error: #[resilient] takes no `breaker_failures`: the circuit breaker counts the failures of every caller of the policy — set it on the policy: `BREAKER_FAILURES`, or `ResilienceConfig::breaker_failures` in code
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting_first.rs:43:17
+   |
+43 |     #[resilient(breaker_failures = 5, carrier)]
+   |                 ^^^^^^^^^^^^^^^^
+
+error: #[resilient] takes no `concurrency`: the bulkhead bounds the calls every caller of the policy runs at once — set it on the policy: `CONCURRENCY`, or `ResilienceConfig::concurrency` in code; a field itself named `concurrency` is renamed
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting_first.rs:51:17
+   |
+51 |     #[resilient(concurrency)]
+   |                 ^^^^^^^^^^^

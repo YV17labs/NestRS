@@ -1,7 +1,7 @@
 # Every dependency is public or private, as Cargo names them
 
 A third-party type in a public signature makes that library's next major a
-nestrs major — for a `0.x` library, its next minor. 7.x is meant to last years,
+nestrs major — for a `0.x` library, its next minor. A major was meant to last years,
 and these libraries cut majors on a shorter clock: opentelemetry went from 0.32
 to 0.33 and jsonwebtoken from 10 to 11 while 7.0 was prepared. Until 2026-10-11
 one manifest comment covered seven of them, and nothing covered the rest.
@@ -28,7 +28,7 @@ until it stabilises.
 
 | Library | Decision |
 |---|---|
-| async-graphql 7 (`=7.2`; `=7.2.1` until 2026-11-05, three segments against the requirement form every other third-party pin takes) | **Public**: its derives and `Context` are what a resolver is written in. If 8.0 is released final before 7.0 is published, 7.0 takes it — a public dependency's major is free until the first publish; after that, 8.0 waits for nestrs 8. Until 2026-11-18 this row said 8.0 carries RUSTSEC-2026-0253's fix; no release does (below). Its poem integration, `async-graphql-poem`, left with `nest_rs::graphql::async_graphql_poem` on 2026-10-19: `/graphql` is served on the transport's own types. |
+| async-graphql 7 (`=7.2`; `=7.2.1` until 2026-11-05, three segments against the requirement form every other third-party pin takes) | **Public**: its derives and `Context` are what a resolver is written in. If 8.0 is released final before 7.0 is published, 7.0 takes it — a public dependency's major is free until the first publish; after that, async-graphql 8.0 waits for the next nestrs major. Until 2026-11-18 this row said 8.0 carries RUSTSEC-2026-0253's fix; no release does (below). Its poem integration, `async-graphql-poem`, left with `nest_rs::graphql::async_graphql_poem` on 2026-10-19: `/graphql` is served on the transport's own types. |
 | rmcp 3 | **Public**: the MCP SDK under the protocol's own organisation; its model types are the MCP schema. |
 | sea-orm 2 (`=2.0`), sea-orm-migration 2 | **Public**: `Repo`'s API by design, and `nest_rs::testing::EphemeralDatabase` takes a `MigratorTrait`. |
 | validator 0.21 | **Public**: `#[validate(…)]` is the app's. A `0.x`, so its next minor is a nestrs major. |
@@ -247,7 +247,7 @@ Applied on 2026-11-17:
   on 2026-10-30, rc.3 on 2026-11-14): 7.0 waits for 2.0 until 2026-12-31, and
   with no final release by then it ships on redis 1.8.
 - **async-graphql 8.0 is stalled** (8.0.0-rc.5 on 2026-04-21, and no release of
-  either line since): 7.0 ships on 7.2, and 8.0 waits for nestrs 8;
+  either line since): 7.0 ships on 7.2, and async-graphql 8.0 waits for the next nestrs major;
   RUSTSEC-2026-0253's ignore stays either way (above).
 - **rustls has development snapshots of 0.24, no release candidate**
   (0.24.0-dev.2 on 2026-10-14, dev.3 on 2026-11-12): its publisher names none a
@@ -279,7 +279,7 @@ GraphQL scalars and schemars; after 7.0 it is a nestrs major. Measured on
 its DTOs, since time's default serde is a tuple of nine integers and schemars
 1.2.3 has no `time` support, and chrono stays in every app with migrations.
 jiff, the advisory's other recommendation, is carried by neither sea-orm 2.0.4
-nor sqlx 0.9: it is nestrs 8's target. `deny.toml` ignores RUSTSEC-2026-0543
+nor sqlx 0.9: it is the next nestrs major's target. `deny.toml` ignores RUSTSEC-2026-0543
 with this reason, and RUSTSEC-2026-0542, humantime, which object_store alone
 brings, with its own.
 
@@ -297,9 +297,31 @@ outside the tree holds a nestrs release, which ships the day the owner tags it.
   release, after its gates.
 
 Applied: **redis** is still 2.0.0-rc.3. Tagged first, 7.0 ships on redis 1.8
-and 2.0 waits for nestrs 8; final first, 7.0 takes it, `nest-rs-redis` having
+and 2.0 waits for the next nestrs major; final first, 7.0 takes it, `nest-rs-redis` having
 passed every topology's suite against rc.3. async-graphql 8 and rustls 0.24
-are unchanged: both wait for nestrs 8.
+are unchanged: both wait for the next nestrs major.
 
 **Refused:** a date set per release candidate. It is still a wait, and the
 owner decides when a release ships, not a third party's calendar.
+
+## 2026-11-27 — rmcp's floor is 3.12
+
+The lockfile took rmcp 3.12.0 (`build(deps)`, 2026-11-27). 3.12's
+streamable-HTTP server answers a body typed JSON that is no JSON-RPC message
+itself, `400` with a JSON-RPC error: `-32700` and `Parse error: <serde's
+error>` for a body that is not JSON, `-32600` and `Invalid request: <serde's
+error>`, with the id it read off the JSON, for JSON that is no message. 3.11
+answered `415` with `fail to deserialize request body <serde's error>`, which
+`nest-rs-mcp` read by its opening and answered `400` itself. Under 3.12 that
+reading met nothing: rmcp's error reached the client in its code's words, as
+every rmcp JSON-RPC error does, but without the `INVALID_ARGUMENT` class.
+
+- **`nest-rs-mcp` reads rmcp 3.12's refusal** by its code and the opening of
+  its message (`error::unread_message`), and answers as before: `400`, no id,
+  the code's words, the `INVALID_ARGUMENT` class. rmcp's message is serde's
+  error, which may quote the body, and the id it reads off a body holding two
+  is one of them, so neither is kept: JSON-RPC 2.0 §5 answers an id it could not
+  detect with none.
+- **The requirement moves to `3.12`**, a minor of a public dependency: under
+  3.11 the refusal would be read by nothing, and the client answered the `415`'s
+  problem document. Correctness decided it, the floor being what the code reads.

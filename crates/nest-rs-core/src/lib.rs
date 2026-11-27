@@ -147,6 +147,7 @@ mod lifecycle;
 mod line_safe;
 #[cfg(feature = "logging")]
 pub mod logging;
+mod meter_seat;
 mod millis;
 mod module;
 mod net;
@@ -198,9 +199,9 @@ pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContainerError,
-    ContestedDeclarationError, DecodeError, DuplicateMetaError, DuplicateProviderError,
-    FactoryCycleError, FactoryFailedError, InitFailedError, LateFactoryError,
-    LateOptionalDependencyError, MissingAmbientError, MissingDependencyError,
+    ContestedDeclarationError, ContestedSafeLinkError, DecodeError, DuplicateMetaError,
+    DuplicateProviderError, FactoryCycleError, FactoryFailedError, InitFailedError,
+    LateFactoryError, LateOptionalDependencyError, MissingAmbientError, MissingDependencyError,
     OverriddenDependencyError, ProviderCycleError, ScopeViolationError, ScopedLayerError,
     UnboundedTransportError, UnbuiltCause, UnbuiltProviderError, UnclaimedOverrideError,
     UngatedDiscoveryError, UnregisteredModuleError, UnresolvedLayerError, UnservedExportError,
@@ -252,7 +253,8 @@ pub mod __private {
         HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor, reachable_providers,
     };
     pub use crate::ambient::{
-        Pending, ReadsWithheld, attached, install_pending, with_ambient_from, with_deadline,
+        Pending, ReadsWithheld, attached, deadline, install_pending, with_ambient_from,
+        with_deadline,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{
@@ -275,7 +277,9 @@ pub mod __private {
     pub use crate::discoverable::__private::Residency;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::env_prefix::__private::RETIRED_VARIABLE;
-    pub use crate::error_message::__private::{SaidFailure, find_in_chain};
+    pub use crate::error_message::__private::{
+        SaidFailure, claimed_link, decode_failure, find_in_chain, link_as,
+    };
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
     pub use crate::exception_filter::{ExceptionFilterSpec, exception_filter};
     pub use crate::handler::{
@@ -300,14 +304,18 @@ pub mod __private {
         ConsoleLayer, LibraryClamp, LogFilter, ProfileSource, TextFormat, filter_dispatch,
         install_global_subscriber, log_filter,
     };
+    pub use crate::meter_seat::__private::{meter_provider_seated, meter_providers_seated};
     pub use crate::millis::millis;
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
+    pub use crate::net::WithinHeld;
     pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{
         KNOWN_VERBS, declare_unit, forget_cause, known_verb, measured_unit, protocol_version,
         set_span_rename, set_unit_end, str_eq, unit_opened_by,
     };
-    pub use crate::outcome::__private::{caught_problem, is_same_failure, kept, settled};
+    pub use crate::outcome::__private::{
+        caught_problem, is_same_failure, is_unavailable, kept, settled,
+    };
     pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::param::{
         ParamProbe, ParamProbeAmbient, ParamProbeFallback, ParamProbeResolves, ProtocolArgument,
@@ -317,7 +325,9 @@ pub mod __private {
     pub use crate::problem::__private::{Withheld, retry_after_secs, withheld, withheld_over};
     pub use crate::process_start::ProcessStart;
     pub use crate::remedy::{RemedyProbe, RemedyProbeCarries, RemedyProbeFallback};
-    pub use crate::request_scope::__private::{RequestScopes, nested_continuation};
+    pub use crate::request_scope::__private::{
+        ExtendedContext, RequestScopes, nested_continuation,
+    };
     pub use crate::request_scope::AnswerContext;
     pub use crate::row_probe::{CrossesAWire, RowProbe, RowProbeFallback};
     pub use crate::site::{

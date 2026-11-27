@@ -42,8 +42,9 @@ macro_rules! carries_one_value {
 
 carries_one_value!(Json, Path, Query, Form, Header);
 
-/// Render a [`PipeError`] as the `400` problem document it answers, its
-/// field-level errors under the `errors` extension member.
+/// Render a [`PipeError`] as the `400` problem document it answers, the
+/// problem it carries: its field-level errors under the `errors` extension
+/// member.
 ///
 /// ```
 /// use nest_rs_http::{StatusCode, pipe_error};
@@ -55,11 +56,7 @@ carries_one_value!(Json, Path, Query, Form, Header);
 /// assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
 /// ```
 pub fn pipe_error(err: &PipeError) -> HttpError {
-    let mut problem = ProblemDetails::bad_request().with_detail(err.message().to_owned());
-    if let Some(details) = err.details() {
-        problem = problem.with_extension(crate::problem::FIELD_ERRORS, details.clone());
-    }
-    problem.into()
+    ProblemDetails::from_problem(err.problem()).into()
 }
 
 /// Run `P` over the value `extracted` carries — the step `#[routes]` takes once

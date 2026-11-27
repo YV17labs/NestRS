@@ -98,7 +98,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { || ::nest_rs_core::__private::dynamic_import_module(|| #value) }
         }
     });
-    let turbofish_warnings = args.imports.iter().filter_map(turbofish_warning);
+    let turbofish_refusals = args.imports.iter().filter_map(turbofish_refusal);
     let provider_descriptors = args.providers.iter().map(|binding| match binding {
         ProviderBinding::Concrete(p) => {
             let name_lit = path_label(p);
@@ -397,7 +397,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 
         #descriptor_submission
 
-        #(#turbofish_warnings)*
+        #(#turbofish_refusals)*
     }
     .into()
 }
@@ -418,9 +418,10 @@ fn import_label(import: &Import) -> String {
     }
 }
 
-/// A stable proc macro warns only through a deprecated item its expansion uses,
-/// spanned here at the developer's `::`.
-fn turbofish_warning(import: &Import) -> Option<proc_macro2::TokenStream> {
+/// The refusal of a module written with the turbofish the published release taught, spanned at
+/// the developer's `::`: the module is still read as its type, so this is the
+/// one error.
+fn turbofish_refusal(import: &Import) -> Option<proc_macro2::TokenStream> {
     let Import::Type {
         turbofish: Some(at),
         ..
@@ -428,19 +429,12 @@ fn turbofish_warning(import: &Import) -> Option<proc_macro2::TokenStream> {
     else {
         return None;
     };
-    let note = format!(
-        "{}: write `{}`, a module as its type, without `::` before `<`; NestRS 8.0 refuses \
-         this spelling",
+    let refusal = format!(
+        "{}: write `{}`, a module as its type, without `::` before `<`",
         site("module", Some("imports")),
         import_label(import),
     );
-    Some(quote_spanned! {*at=>
-        const _: () = {
-            #[deprecated(note = #note)]
-            const IMPORT_WRITTEN_WITH_TURBOFISH: () = ();
-            IMPORT_WRITTEN_WITH_TURBOFISH
-        };
-    })
+    Some(quote_spanned! {*at=> ::core::compile_error!(#refusal); })
 }
 
 fn path_tail_of_type(ty: &Type) -> String {
@@ -765,21 +759,21 @@ mod tests {
     }
 
     #[test]
-    fn only_a_turbofish_warns_and_its_note_spells_the_module_as_its_type() {
+    fn only_a_turbofish_is_refused_and_its_refusal_spells_the_module_as_its_type() {
         let forwarded = grouped(quote! { RedisModule::<Cache> });
-        let warnings: Vec<Option<String>> = imports(quote! {
+        let refusals: Vec<Option<String>> = imports(quote! {
             UsersModule, RedisModule<Cache>, RedisModule::<Cache>, #forwarded,
             HttpModule::for_root(cfg)
         })
         .iter()
-        .map(|import| turbofish_warning(import).map(|warning| warning.to_string()))
+        .map(|import| turbofish_refusal(import).map(|refusal| refusal.to_string()))
         .collect();
-        let warned: Vec<bool> = warnings.iter().map(Option::is_some).collect();
-        assert_eq!(warned, [false, false, true, true, false]);
-        let warning = warnings[2].as_deref().unwrap_or_default();
+        let refused: Vec<bool> = refusals.iter().map(Option::is_some).collect();
+        assert_eq!(refused, [false, false, true, true, false]);
+        let refusal = refusals[2].as_deref().unwrap_or_default();
         assert!(
-            warning.contains("#[module] `imports`: write `RedisModule<Cache>`"),
-            "{warning}"
+            refusal.contains("#[module] `imports`: write `RedisModule<Cache>`"),
+            "{refusal}"
         );
     }
 

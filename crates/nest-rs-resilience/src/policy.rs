@@ -1,31 +1,30 @@
 //! [`ResiliencePolicy`] — one named policy around the calls to one dependency:
-//! a timeout per attempt, retries for an idempotent call, a circuit breaker and
-//! a bulkhead, every one of them shared by every caller in the process.
+//! a timeout per attempt, retries for an idempotent call, a circuit breaker, a
+//! bulkhead and an outbound rate limit, every one of them shared by every
+//! caller in the process.
 
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use nest_rs_config::{ConfigError, Namespaced, instance_namespace};
-use nest_rs_core::{
-    Backoff, Deadline, Instance, Problem, Unanswered, Unnamed, process_seed, within,
-};
-use tokio::sync::SemaphorePermit;
+use nest_rs_core::{Instance, Unnamed};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::breaker::Breaker;
+use crate::breaker::{Breaker, BreakerState, BreakerStats};
 use crate::bulkhead::Bulkhead;
-use crate::config::ResilienceConfig;
-use crate::counters::Counters;
-use crate::error::{Refusal, ResilienceError};
-use crate::{TARGET, millis};
+use crate::call::{Again, Cancellable, MakeAgain, MakeOnce, Once, Uncancelled};
+use crate::config::{ResilienceConfig, is_open_time};
+use crate::error::{BreakerError, ResilienceError};
+use crate::events::ResilienceEvents;
+use crate::mechanisms::Mechanisms;
+use crate::resilient::{Judge, ResilientAnswer, ResilientMethod, judging_by_default};
+use crate::run::{Run, Running};
 
 /// The calls to one dependency — a payment provider, a carrier's API, a
 /// language model — run under one policy, by every caller in the process.
@@ -33,20 +32,85 @@ use crate::{TARGET, millis};
 /// Injected as `Arc<ResiliencePolicy<I>>` once a module imports
 /// [`ResilienceModule<I>`](crate::ResilienceModule), which builds it from
 /// `<PREFIX>_RESILIENCE__<INSTANCE>__*` ([`ResilienceConfig`]); the default
-/// instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`.
+/// instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`. A method runs
+/// its body under it through [`#[resilient]`](macro@crate::resilient), naming
+/// the field that holds it, and reads its attempt's [`CancellationToken`]
+/// under the name its `cancel` key gives; [`run`](Self::run) and
+/// [`run_idempotent`](Self::run_idempotent) take a call that is part of a
+/// method, as a closure of no argument, and
+/// [`run_cancellable`](Self::run_cancellable) and
+/// [`run_idempotent_cancellable`](Self::run_idempotent_cancellable) hand it that
+/// token.
 ///
 /// Each attempt is given up past the policy's timeout or the deadline of the
 /// unit it runs in (`nest_rs_core::Deadline`), whichever comes first, and its
-/// [`CancellationToken`] cancelled, so work the call handed to another task
-/// stops with it; no retry starts whose wait ends past that deadline. A call is attempted again only when it is declared
-/// idempotent, through [`run_idempotent`](Self::run_idempotent): replaying one
-/// that is not would charge a card twice. Every attempt's outcome counts in the
-/// circuit breaker, which refuses every call at once while it is open, and the
-/// bulkhead bounds how many calls run inside the policy together.
+/// [`CancellationToken`], when its call takes one, cancelled, so work the call
+/// handed to another task stops with it; no retry starts whose wait ends past
+/// that deadline. A call under one policy made from an attempt of another — a
+/// decorated method calling a second dependency's — is given up with that
+/// attempt, when that one's bound ends first: its own attempt, in flight
+/// there, counts as timed out in its own breaker, so a dependency that never
+/// answers opens the breaker naming it however short the timeout its caller
+/// runs under, and what its run held unsent — a slot, a token, a probe's turn
+/// — is given back, counted for nothing. A call is attempted again only when
+/// it is declared idempotent, through [`run_idempotent`](Self::run_idempotent):
+/// replaying one that is not would charge a card twice. An attempt's success
+/// or failure counts in the circuit breaker, which refuses every call at once
+/// while it is open, the bulkhead bounds how many calls run inside the policy
+/// together, and the rate limit how many attempts it sends per window, a retry
+/// included.
 ///
-/// Every `Err` the call answers counts as the dependency failing. An answer
-/// the dependency gave — a declined card, a parcel not found — belongs in the
-/// call's `Ok`, so it is neither retried nor counted.
+/// Inside a unit of work holding a transaction, each attempt of a call
+/// declared idempotent, and of a decorated method declaring a `fallback`,
+/// sent once or again, runs in a savepoint of it, sent with the attempt's
+/// first statement and settled before the next attempt and before the run
+/// answers: kept when the run answers the attempt's `Ok`, rolled back when the
+/// attempt failed, was given up at its bound or panicked. A failed attempt so
+/// leaves no write for the next to repeat, and a run ending on an error leaves
+/// its unit what it wrote before the call — whatever retries the policy has,
+/// none included: what a call leaves is read off how it is declared, never off
+/// a setting of the deployment's. Any other call sent once, and a run on the
+/// pool, open none: an `Err` there leaves what its body wrote, as it does with
+/// no policy.
+///
+/// Every `Err` a call run through [`run`](Self::run) or
+/// [`run_idempotent`](Self::run_idempotent) answers counts as the dependency
+/// failing, and is sent again when the call is idempotent: an answer the
+/// dependency gave — a declined card, a parcel not found — belongs in such a
+/// call's `Ok`, so it is neither retried nor counted a failure. A decorated
+/// method says otherwise of its own answers, key by key — `retry_if`,
+/// `retry_ok_if` and `record_if`, an `Err` `record_if` refuses counting in the
+/// breaker as neither a failure nor a success — and names the `fallback`
+/// answering in place of the error its run ends on. The error is a
+/// [`std::error::Error`]: its chain is the `error` of the line a retry files,
+/// at `debug`, and of the `warn` the breaker files when that failure opens it,
+/// where an operator reads what the dependency answered once every caller is
+/// told the breaker is open. A URL in that chain — whatever follows a `://`,
+/// up to the next whitespace, control character, double quote or angle
+/// bracket — is told by its scheme, its host and a port of digits, and by its
+/// scheme alone where an `@` past its authority's end leaves its host
+/// impossible to tell from a userinfo: no byte of the userinfo, the path, the
+/// query or the fragment a request carried. A status reqwest's own sentence
+/// says is told by its class and its code, and the chain no further: the
+/// phrase reqwest writes after the code is the dependency's. A value an error
+/// quotes otherwise is the error's to keep out, a URL holding one of those
+/// four unencoded included, which is read as ending there.
+///
+/// A call made inside an attempt of its own policy is a call that attempt
+/// makes, sharing what the attempt holds and counting in it as [a call inside
+/// an attempt of its own
+/// policy](https://nestrs.dev/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy)
+/// does.
+///
+/// The breaker's state is read through [`breaker_state`](Self::breaker_state),
+/// and switched by hand — an operator taking a dependency out for its
+/// maintenance window — through [`open_breaker`](Self::open_breaker) and
+/// [`close_breaker`](Self::close_breaker). What the policy holds now is read
+/// beside it — [`breaker_stats`](Self::breaker_stats),
+/// [`concurrency_running`](Self::concurrency_running),
+/// [`concurrency_waiting`](Self::concurrency_waiting),
+/// [`rate_available`](Self::rate_available) — and what it does is told as it
+/// happens to each subscription [`events`](Self::events) opens.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -66,7 +130,7 @@ use crate::{TARGET, millis};
 /// impl PreviewService {
 ///     pub async fn preview(&self, url: &str) -> Result<String, ResilienceError<std::io::Error>> {
 ///         self.upstream
-///             .run_idempotent(|_cancel| async move { Ok(format!("a preview of {url}")) })
+///             .run_idempotent(|| async move { Ok(format!("a preview of {url}")) })
 ///             .await
 ///     }
 /// }
@@ -83,300 +147,337 @@ use crate::{TARGET, millis};
 /// # }
 /// ```
 pub struct ResiliencePolicy<I = Unnamed> {
-    timeout: Duration,
-    retries: u32,
-    backoff: Backoff,
-    breaker: Option<Breaker>,
-    bulkhead: Option<Bulkhead>,
-    counters: Arc<Counters>,
-    /// Sets each run's jitter apart from the others'.
-    runs: AtomicU64,
+    pub(crate) mechanisms: Arc<Mechanisms>,
     _instance: PhantomData<fn() -> I>,
-}
-
-/// How an attempt's answer counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Verdict {
-    Succeeded,
-    /// The dependency failed, asking the wait before a retry when it said one.
-    Failed {
-        asked: Option<Duration>,
-    },
-}
-
-/// One attempt's answer and how it counts, or the policy's refusal.
-pub(crate) type Attempted<T> = Result<(T, Verdict), Refusal>;
-
-/// One run of a call under its policy, holding its bulkhead slot.
-pub(crate) struct Run<'p, I> {
-    policy: &'p ResiliencePolicy<I>,
-    _slot: Option<SemaphorePermit<'p>>,
-    /// The deadline of the unit the run is in, which no attempt and no wait
-    /// outlives.
-    deadline: Option<Instant>,
-    /// Drawn at the first retry, so a call answering at once draws none.
-    seed: Option<u64>,
-    /// How many times this run sent its call again so far.
-    pub(crate) resent: u32,
 }
 
 impl<I: Instance> ResiliencePolicy<I> {
     /// The policy `config` describes, refusing a combination of its settings
-    /// that cannot work, named as the instance's variables.
+    /// that cannot work, named as the instance's variables
+    /// ([`Mechanisms::new`]).
     pub(crate) fn new(config: &ResilienceConfig) -> Result<Self, ConfigError> {
-        let namespace = instance_namespace::<I>(ResilienceConfig::NAMESPACE);
-        if config.backoff_first > config.backoff_ceiling {
-            return Err(ConfigError::parse(
-                ResilienceConfig::BACKOFF_FIRST.var(&namespace),
-                format!(
-                    "must be at most {}: a first wait above the longest one is never waited",
-                    ResilienceConfig::BACKOFF_CEILING.var_or_field(&namespace),
-                ),
-            ));
-        }
-        if let Some(window) = config.breaker_window
-            && config.breaker_failures > window
-        {
-            return Err(ConfigError::parse(
-                ResilienceConfig::BREAKER_FAILURES.var(&namespace),
-                format!(
-                    "must be at most {}: a breaker opening on more failures than its window \
-                     holds never opens",
-                    ResilienceConfig::BREAKER_WINDOW.var_or_field(&namespace),
-                ),
-            ));
-        }
-        let retries = config
-            .retries
-            .map_or(0, |retries| u32::try_from(retries).unwrap_or(u32::MAX));
-        let counters = Arc::new(Counters::new(I::NAME));
         Ok(Self {
-            timeout: config.timeout,
-            retries,
-            backoff: Backoff::new(config.backoff_first, config.backoff_ceiling),
-            breaker: config.breaker_window.map(|window| {
-                Breaker::new(
-                    I::NAME,
-                    window,
-                    config.breaker_failures,
-                    config.breaker_open,
-                    config.timeout,
-                    Arc::clone(&counters),
-                )
-            }),
-            bulkhead: config
-                .concurrency
-                .map(|slots| Bulkhead::new(slots, config.concurrency_wait)),
-            counters,
-            runs: AtomicU64::new(0),
+            mechanisms: Mechanisms::new::<I>(config)?,
             _instance: PhantomData,
         })
     }
 
-    /// Run `call` once, under the policy's timeout, breaker and bulkhead, and
-    /// never again: a call this runs may change what it calls, so a retry could
-    /// do it twice.
+    /// Run `call` once, under the policy's timeout, breaker, bulkhead and rate
+    /// limit, and never again: a call this runs may change what it calls, so a
+    /// retry could do it twice.
     ///
-    /// `call` is handed the attempt's [`CancellationToken`], cancelled when the
-    /// attempt is given up.
-    pub async fn run<T, E, F, Fut>(&self, call: F) -> Result<T, ResilienceError<E>>
+    /// Its error is a [`std::error::Error`], whose chain the breaker's opening
+    /// tells when that failure opens it. An attempt given up is dropped where it
+    /// waits; a call handing work beyond its future — a spawned task, a request
+    /// another client sends — takes the attempt's token through
+    /// [`run_cancellable`](Self::run_cancellable).
+    pub fn run<T, E, F, Fut>(&self, call: F) -> impl Future<Output = Result<T, ResilienceError<E>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: Error + 'static,
+    {
+        self.run_once::<Result<T, ResilienceError<E>>, _, Uncancelled, _>(
+            None,
+            judging_by_default(),
+            call,
+        )
+    }
+
+    /// [`run`](Self::run), `call` handed the attempt's [`CancellationToken`],
+    /// cancelled when the attempt is given up: the one a call needs for work
+    /// that outlives its future, made for this call alone.
+    pub fn run_cancellable<T, E, F, Fut>(
+        &self,
+        call: F,
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
+        E: Error + 'static,
     {
-        let mut run = self.begin().await?;
-        let attempted = run.attempt(call, judged).await;
-        settled(run.finish(attempted))
+        self.run_once::<Result<T, ResilienceError<E>>, _, Cancellable, _>(
+            None,
+            judging_by_default(),
+            call,
+        )
     }
 
     /// Run the idempotent `call`, attempting it again after a failed or timed
     /// out attempt, up to the policy's retries, each retry waiting the
     /// policy's backoff first — or longer, the `Retry-After` of a
-    /// [`Problem`] its error's chain carries; an open breaker ends the run at
-    /// once.
+    /// [`Problem`](nest_rs_core::Problem) its error's chain carries. An attempt
+    /// the circuit breaker refuses ends the run at once, as does one finding no
+    /// token of the rate limit free that cannot wait for the next.
     ///
     /// Idempotent means one call or several leave the dependency as one does:
     /// a read, a `PUT`, a request carrying an idempotency key the dependency
-    /// honours. `call` is handed each attempt's [`CancellationToken`],
-    /// cancelled when that attempt is given up.
-    pub async fn run_idempotent<T, E, F, Fut>(&self, mut call: F) -> Result<T, ResilienceError<E>>
+    /// honours. Its error is a [`std::error::Error`], whose chain each retry's
+    /// line tells, and the breaker's opening when that failure opens it; an
+    /// attempt given up is dropped where it waits, and a call handing work
+    /// beyond its future takes each attempt's token through
+    /// [`run_idempotent_cancellable`](Self::run_idempotent_cancellable).
+    ///
+    /// Inside a unit of work holding a transaction, each attempt runs in a
+    /// savepoint of that transaction, whether or not the policy has retries:
+    /// what `call` writes through the data layer is rolled back unless the run
+    /// answers that attempt's `Ok`. Once an attempt sent a statement, its
+    /// savepoint holds the unit until it settles, so another statement of that
+    /// unit, issued beside the run, waits for it; an attempt given up while one
+    /// of its statements runs is rolled back once that statement ends, which
+    /// the next attempt and the run's answer wait for, and one given up before
+    /// its savepoint was answered — its unit waiting for a connection, or for
+    /// that answer — leaves the unit as it was; and a run dropped mid-attempt,
+    /// once its savepoint was answered, leaves what holds that savepoint
+    /// unable to commit, as an atomic block dropped does: its unit — or, for a
+    /// run nested in another run's attempt or in an atomic block, that
+    /// attempt's savepoint or that block alone, which is rolled back while
+    /// the unit goes on to commit. A savepoint the database cannot settle
+    /// ends the run on [`ResilienceError::Unsettled`].
+    ///
+    /// An attempt's wait for its unit counts against its bound: of two such
+    /// calls joined in one transaction, the second's first statement waits
+    /// for the first's whole attempt, and may be given up at its timeout and
+    /// counted as its dependency's failure — send them one after the other,
+    /// or outside the transaction.
+    pub fn run_idempotent<T, E, F, Fut>(
+        &self,
+        call: F,
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: Error + 'static,
+    {
+        self.run_again::<Result<T, ResilienceError<E>>, _, Uncancelled, _>(
+            None,
+            judging_by_default(),
+            call,
+        )
+    }
+
+    /// [`run_idempotent`](Self::run_idempotent), `call` handed each attempt's
+    /// own [`CancellationToken`], cancelled when that attempt is given up.
+    pub fn run_idempotent_cancellable<T, E, F, Fut>(
+        &self,
+        call: F,
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
         F: FnMut(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        let mut run = self.begin().await?;
-        loop {
-            let attempted = run.attempt(&mut call, judged_asking).await;
-            if !run.again(&attempted).await {
-                return settled(run.finish(attempted));
-            }
-        }
+        self.run_again::<Result<T, ResilienceError<E>>, _, Cancellable, _>(
+            None,
+            judging_by_default(),
+            call,
+        )
     }
 
-    /// Open one run, taking a slot of the bulkhead within the unit's deadline —
-    /// refused at once by an open breaker rather than after waiting for one.
-    pub(crate) async fn begin(&self) -> Result<Run<'_, I>, Refusal> {
-        let deadline = nest_rs_core::ambient::<Deadline>().map(|deadline| deadline.0);
-        let slot = match &self.bulkhead {
-            Some(bulkhead) => {
-                if let Some(retry_after) = self.breaker.as_ref().and_then(Breaker::refusing) {
-                    return Err(self.refused(Refusal::Open(retry_after)));
-                }
-                let Some(slot) = bulkhead.enter(deadline).await else {
-                    tracing::debug!(
-                        target: TARGET,
-                        instance = I::NAME,
-                        "bulkhead full; the call is refused",
-                    );
-                    return Err(self.refused(Refusal::Full));
-                };
-                Some(slot)
-            }
-            None => None,
-        };
-        Ok(Run {
-            policy: self,
-            _slot: slot,
-            deadline,
-            seed: None,
-            resent: 0,
-        })
-    }
-
-    /// `refusal`, counted.
-    fn refused(&self, refusal: Refusal) -> Refusal {
-        self.counters.refusal(refusal);
-        refusal
-    }
-}
-
-impl<I: Instance> Run<'_, I> {
-    /// Whether the run may still send its call again.
-    #[cfg(feature = "reqwest")]
-    pub(crate) const fn may_resend(&self) -> bool {
-        self.resent < self.policy.retries
-    }
-
-    /// One attempt of `call`: admitted by the breaker, bounded by the timeout or
-    /// what is left of the unit's deadline, whichever ends first, its answer
-    /// counted as `judge` reads it. With nothing left of the deadline the call
-    /// is not sent. A panic in the call counts as a failure and unwinds on, for
-    /// the unit to contain as it would without the policy.
-    pub(crate) async fn attempt<T, F, Fut>(
-        &mut self,
+    /// `call` run once, for `method` when a decorated method runs it, its
+    /// future made as `K` makes it — handed a token or none — its answer read
+    /// as `R` reads a body's and answered as `R`, an `Err` a failure in the
+    /// breaker when `judging` records it and counted in neither direction
+    /// otherwise: what [`run`](Self::run) and
+    /// [`run_cancellable`](Self::run_cancellable) run, with no method and every
+    /// `Err` a failure.
+    pub(crate) fn run_once<R, J, K, F>(
+        &self,
+        method: Option<&'static ResilientMethod>,
+        judging: J,
         call: F,
-        judge: impl FnOnce(&T) -> Verdict,
-    ) -> Attempted<T>
+    ) -> Running<'_, R, Once<F, K>, J>
     where
-        F: FnOnce(CancellationToken) -> Fut,
-        Fut: Future<Output = T>,
+        R: ResilientAnswer,
+        R::Err: Error + 'static,
+        J: Judge<R>,
+        K: MakeOnce<F>,
+        K::Made: Future<Output = R::Attempt>,
     {
-        let bound = self.deadline.map_or(self.policy.timeout, |deadline| {
-            self.policy
-                .timeout
-                .min(deadline.saturating_duration_since(Instant::now()))
-        });
-        if bound.is_zero() {
-            return Err(Refusal::TimedOut(bound));
+        let run = Run::new(&self.mechanisms, method, false);
+        Running::new(Once::new(call), judging, run)
+    }
+
+    /// The idempotent `call` run, for `method` when a decorated method runs
+    /// it, each attempt's future made as `K` makes it — handed a token or
+    /// none — each answer read as `R` reads a body's and the last answered as
+    /// `R`, each counted as `judging` says — an `Err` or an `Ok` sent again
+    /// when it retries it, an `Err` a failure in the breaker when it records
+    /// it and counted in neither direction otherwise: what
+    /// [`run_idempotent`](Self::run_idempotent) and
+    /// [`run_idempotent_cancellable`](Self::run_idempotent_cancellable) run,
+    /// with no method and every `Err` a failure sent again.
+    pub(crate) fn run_again<R, J, K, F>(
+        &self,
+        method: Option<&'static ResilientMethod>,
+        judging: J,
+        call: F,
+    ) -> Running<'_, R, Again<F, K>, J>
+    where
+        R: ResilientAnswer,
+        R::Err: Error + 'static,
+        J: Judge<R>,
+        K: MakeAgain<F>,
+        K::Made: Future<Output = R::Attempt>,
+    {
+        let run = Run::new(&self.mechanisms, method, true);
+        Running::new(Again::new(call), judging, run)
+    }
+
+    /// The circuit breaker's state, as a call arriving now meets it, or `None`
+    /// for a policy with no breaker (`BREAKER_WINDOW` set to `0`).
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use nest_rs_resilience::{BreakerState, ResiliencePolicy};
+    ///
+    /// fn retry_after(policy: &ResiliencePolicy) -> Option<Duration> {
+    ///     match policy.breaker_state()? {
+    ///         BreakerState::Open { retry_after, .. } => Some(retry_after),
+    ///         _ => None,
+    ///     }
+    /// }
+    /// ```
+    pub fn breaker_state(&self) -> Option<BreakerState> {
+        self.mechanisms.breaker.as_ref().map(Breaker::read)
+    }
+
+    /// What the circuit breaker's window counts now — its outcomes, and the
+    /// failures among them — as a call arriving now meets it, or `None` for a
+    /// policy with no breaker (`BREAKER_WINDOW` set to `0`).
+    ///
+    /// An outcome past [`breaker_age`](ResilienceConfig::breaker_age) counts
+    /// no more, and the window is forgotten as the breaker opens: open or
+    /// half-open it reads none, and counts afresh once closed.
+    pub fn breaker_stats(&self) -> Option<BreakerStats> {
+        self.mechanisms.breaker.as_ref().map(Breaker::stats)
+    }
+
+    /// How many calls hold a slot of the bulkhead now — each for its whole
+    /// run, its retries and their waits included, and through
+    /// [`ResilienceMiddleware`](crate::ResilienceMiddleware) until its
+    /// response's body ends — or `None` for a policy with no bulkhead
+    /// (`CONCURRENCY` unset). A call is counted from the moment its own
+    /// future holds its slot: one a freed slot is handed to is read as
+    /// [waiting](Self::concurrency_waiting) until it is polled, so at every
+    /// instant a call is in one of the two reads and never in both.
+    pub fn concurrency_running(&self) -> Option<usize> {
+        self.mechanisms.bulkhead.as_ref().map(Bulkhead::running)
+    }
+
+    /// How many calls wait for a slot of the bulkhead now, or `None` for a
+    /// policy with no bulkhead (`CONCURRENCY` unset): none ever, where a call
+    /// finding no free slot does not wait (`CONCURRENCY_WAIT_MS` unset).
+    pub fn concurrency_waiting(&self) -> Option<usize> {
+        self.mechanisms.bulkhead.as_ref().map(Bulkhead::waiting)
+    }
+
+    /// How many tokens of the rate limit are free now — what as many attempts
+    /// arriving together would take, none while an attempt waits for one — or
+    /// `None` for a policy with no rate limit (`RATE_LIMIT` unset).
+    pub fn rate_available(&self) -> Option<usize> {
+        self.mechanisms
+            .rate
+            .as_ref()
+            .map(|rate| rate.available(Instant::now()))
+    }
+
+    /// A subscription to what the policy does from now on: each retry, each
+    /// attempt given up at its bound, each call refused unsent, each
+    /// transition of its breaker and each fallback answering for a run, as a
+    /// [`ResilienceEvent`](crate::ResilienceEvent). Every subscription is told
+    /// every event; one opened later is told nothing that came before it.
+    ///
+    /// With no subscription open, the policy builds no event. A subscription
+    /// is this process's, as the policy's state is, and ends once the policy
+    /// is dropped.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use nest_rs_resilience::{BreakerPhase, ResilienceEvent, ResiliencePolicy};
+    ///
+    /// fn watch(policy: &Arc<ResiliencePolicy>) {
+    ///     // The task holds the subscription and not the policy, so it ends
+    ///     // with the app.
+    ///     let mut events = policy.events();
+    ///     tokio::spawn(async move {
+    ///         while let Some(event) = events.next().await {
+    ///             if let ResilienceEvent::Transition { to, manual: false, .. } = event
+    ///                 && to == BreakerPhase::Open
+    ///             {
+    ///                 // The dependency is failing: page whoever is on call.
+    ///             }
+    ///         }
+    ///     });
+    /// }
+    /// ```
+    pub fn events(&self) -> ResilienceEvents {
+        self.mechanisms.teller.subscribe()
+    }
+
+    /// Open the circuit breaker by hand for `duration`, an open time
+    /// [`breaker_open`](ResilienceConfig::breaker_open) takes in code, above
+    /// zero and up to an hour: every call is refused unsent, as by an open
+    /// breaker, told what is left of it — one an attempt in flight makes of
+    /// this policy included — then the breaker probes the dependency as after
+    /// any opening.
+    ///
+    /// Whatever the breaker was in, `duration` counts from now and replaces
+    /// any open time it had, shorter or longer, and its window is forgotten:
+    /// a call let through before it changes nothing once it answers — a probe
+    /// answering a success closes nothing — and a probe waiting for its token
+    /// of the rate loses its turn. When its wait ends it meets the breaker as
+    /// a call
+    /// arriving then does: refused while the opening lasts, and taking the
+    /// next probe's turn once it has passed. Each call's transition is filed as a
+    /// `warn`, marked `manual` and carrying the open time it was given, and
+    /// counts on the transitions' counter marked manual, whether or not the
+    /// breaker was open already.
+    ///
+    /// The switch is this process's, as the breaker is: each replica keeps its
+    /// own, so a dependency taken out for the whole app is switched on every
+    /// replica.
+    ///
+    /// # Errors
+    ///
+    /// [`BreakerError::Off`] for a policy with no breaker, and
+    /// [`BreakerError::OutOfRange`] for a `duration` `breaker_open` would not
+    /// take in code, none or one past an hour; either leaves the breaker as it
+    /// was.
+    pub fn open_breaker(&self, duration: Duration) -> Result<(), BreakerError> {
+        let breaker = self.mechanisms.breaker.as_ref().ok_or(BreakerError::Off)?;
+        if !is_open_time(duration) {
+            return Err(BreakerError::out_of_range());
         }
-        let pass = self
-            .policy
+        breaker.open_manually(duration);
+        Ok(())
+    }
+
+    /// Close the circuit breaker by hand, forgetting its window: every call
+    /// is sent again, and counted afresh.
+    ///
+    /// Whatever the breaker was in, a call let through before it changes
+    /// nothing once it answers: a probe answering a failure opens nothing,
+    /// and no such answer counts in the window that follows. A breaker its
+    /// probes closed counts the same way: the answer of a call sent before
+    /// it opened counts nowhere. Each call's transition is filed as a `warn`,
+    /// marked `manual`, and counts on the transitions' counter marked
+    /// manual, whether or not the breaker was closed already.
+    /// Like [`open_breaker`](Self::open_breaker), it switches this replica's
+    /// breaker alone.
+    ///
+    /// # Errors
+    ///
+    /// [`BreakerError::Off`] for a policy with no breaker.
+    pub fn close_breaker(&self) -> Result<(), BreakerError> {
+        self.mechanisms
             .breaker
             .as_ref()
-            .map(Breaker::admit)
-            .transpose()
-            .map_err(Refusal::Open)?;
-        let cancel = CancellationToken::new();
-        let given_up = cancel.clone().drop_guard();
-        let answered = within(bound, async move { call(cancel).await })
-            .await
-            .map(|answer| {
-                let verdict = judge(&answer);
-                (answer, verdict)
-            });
-        if let Some(pass) = pass {
-            pass.settle(!matches!(answered, Ok((_, Verdict::Succeeded))));
-        }
-        match answered {
-            Ok(judged) => {
-                let _kept = given_up.disarm();
-                Ok(judged)
-            }
-            Err(Unanswered::Panicked(payload)) => std::panic::resume_unwind(payload),
-            Err(_elapsed) => Err(Refusal::TimedOut(bound)),
-        }
-    }
-
-    /// The run's last attempt, its refusal counted when it ended on one.
-    pub(crate) fn finish<T>(&self, attempted: Attempted<T>) -> Attempted<T> {
-        attempted.map_err(|refusal| self.policy.refused(refusal))
-    }
-
-    /// Whether to attempt the call again after `attempted`, having waited the
-    /// backoff when so: after a failure or a timeout, within the policy's
-    /// retries, unless the dependency asked a wait past the backoff's ceiling.
-    pub(crate) async fn again<T>(&mut self, attempted: &Attempted<T>) -> bool {
-        let asked = match attempted {
-            Ok((_, Verdict::Failed { asked })) => *asked,
-            Err(Refusal::TimedOut(_)) => None,
-            Ok((_, Verdict::Succeeded)) | Err(Refusal::Open(_) | Refusal::Full) => return false,
-        };
-        let Some(wait) = self.retry_wait(asked) else {
-            return false;
-        };
-        tracing::debug!(
-            target: TARGET,
-            instance = I::NAME,
-            attempt = self.resent.saturating_add(1),
-            wait_ms = millis(wait),
-            "attempt failed; retrying the call",
-        );
-        tokio::time::sleep(wait).await;
-        self.resent = self.resent.saturating_add(1);
-        self.policy.counters.retry();
-        true
-    }
-
-    /// How long to wait before the next attempt, after one that failed asking
-    /// `asked`, or `None` when the run ends there.
-    fn retry_wait(&mut self, asked: Option<Duration>) -> Option<Duration> {
-        let policy = self.policy;
-        if self.resent >= policy.retries {
-            return None;
-        }
-        let ceiling = policy.backoff.ceiling();
-        if let Some(asked) = asked.filter(|asked| *asked > ceiling) {
-            tracing::debug!(
-                target: TARGET,
-                instance = I::NAME,
-                asked_ms = millis(asked),
-                ceiling_ms = millis(ceiling),
-                "the dependency asked a wait past the backoff's ceiling; not attempted again",
-            );
-            return None;
-        }
-        let seed = *self.seed.get_or_insert_with(|| {
-            let run = policy.runs.fetch_add(1, Ordering::Relaxed);
-            process_seed() ^ Backoff::seed(&run.to_le_bytes())
-        });
-        let failed = NonZeroU32::MIN.saturating_add(self.resent);
-        let backoff = policy.backoff.wait(failed, seed);
-        let wait = asked.map_or(backoff, |asked| {
-            backoff.max(Backoff::honouring(asked, failed, seed))
-        });
-        if let Some(deadline) = self.deadline
-            && Instant::now() + wait >= deadline
-        {
-            tracing::debug!(
-                target: TARGET,
-                instance = I::NAME,
-                wait_ms = millis(wait),
-                "no time left before the unit's deadline; not attempted again",
-            );
-            return None;
-        }
-        Some(wait)
+            .ok_or(BreakerError::Off)?
+            .close_manually();
+        Ok(())
     }
 }
 
@@ -390,53 +491,26 @@ impl<I: Instance> nest_rs_core::CarriesRemedy for ResiliencePolicy<I> {
     }
 }
 
-impl<I: Instance> fmt::Debug for ResiliencePolicy<I> {
+impl<I> fmt::Debug for ResiliencePolicy<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mechanisms = &*self.mechanisms;
         f.debug_struct("ResiliencePolicy")
-            .field("instance", &I::NAME)
-            .field("timeout", &self.timeout)
-            .field("retries", &self.retries)
-            .field("breaker", &self.breaker.is_some())
-            .field("bulkhead", &self.bulkhead.is_some())
+            .field("instance", &mechanisms.teller.instance())
+            .field("timeout", &mechanisms.timeout)
+            .field("retries", &mechanisms.retries)
+            .field("breaker", &mechanisms.breaker.is_some())
+            .field("bulkhead", &mechanisms.bulkhead.is_some())
+            .field("rate", &mechanisms.rate.is_some())
             .finish_non_exhaustive()
-    }
-}
-
-fn judged<T, E>(answer: &Result<T, E>) -> Verdict {
-    match answer {
-        Ok(_) => Verdict::Succeeded,
-        Err(_) => Verdict::Failed { asked: None },
-    }
-}
-
-/// [`judged`], asking the wait a [`Problem`] in the error's chain asks.
-fn judged_asking<T, E: Error + 'static>(answer: &Result<T, E>) -> Verdict {
-    match answer {
-        Ok(_) => Verdict::Succeeded,
-        Err(error) => Verdict::Failed {
-            asked: nest_rs_core::__private::find_in_chain::<Problem>(error)
-                .and_then(Problem::retry_after)
-                .map(|seconds| Duration::from_secs(seconds.into())),
-        },
-    }
-}
-
-fn settled<T, E>(attempted: Attempted<Result<T, E>>) -> Result<T, ResilienceError<E>> {
-    match attempted {
-        Ok((Ok(value), _)) => Ok(value),
-        Ok((Err(error), _)) => Err(ResilienceError::Failed(error)),
-        Err(refusal) => Err(refusal.into()),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicU32;
-
     use nest_rs_core::{CarriesRemedy, instance};
 
     use super::*;
+    use crate::TARGET;
 
     #[instance]
     struct Upstream;
@@ -445,484 +519,12 @@ mod tests {
     #[error("the upstream refused")]
     struct Refused;
 
-    /// An error passing on the wait its dependency asked, as a `Problem`.
-    #[derive(Debug, thiserror::Error)]
-    #[error("the upstream asked to slow down")]
-    struct Throttled(#[source] Problem);
-
     fn policy(config: ResilienceConfig) -> ResiliencePolicy<Upstream> {
         ResiliencePolicy::new(&config).expect("a valid policy")
     }
 
-    /// Retries on, no breaker, no bulkhead: the subject is the retry.
-    fn retrying(retries: usize) -> ResiliencePolicy<Upstream> {
-        policy(ResilienceConfig {
-            retries: Some(retries),
-            breaker_window: None,
-            ..ResilienceConfig::default()
-        })
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_call_answering_at_once_is_its_own_answer() {
-        let answered = retrying(2)
-            .run(|_| async { Ok::<_, Refused>("charged") })
-            .await;
-        assert!(matches!(answered, Ok("charged")), "{answered:?}");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_call_not_declared_idempotent_is_never_attempted_again() {
-        let calls = AtomicU32::new(0);
-        let answered = retrying(2)
-            .run(|_| async {
-                calls.fetch_add(1, Ordering::Relaxed);
-                Err::<(), _>(Refused)
-            })
-            .await;
-        assert!(
-            matches!(answered, Err(ResilienceError::Failed(Refused))),
-            "{answered:?}"
-        );
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn an_idempotent_call_is_attempted_again_after_the_backoff_up_to_its_retries() {
-        let calls = AtomicU32::new(0);
-        let started = tokio::time::Instant::now();
-        let answered = retrying(2)
-            .run_idempotent(|_| async {
-                calls.fetch_add(1, Ordering::Relaxed);
-                Err::<(), _>(Refused)
-            })
-            .await;
-        assert!(matches!(answered, Err(ResilienceError::Failed(Refused))));
-        assert_eq!(calls.load(Ordering::Relaxed), 3, "one call and two retries");
-        let waited = started.elapsed();
-        let (first, second) = (Duration::from_millis(200), Duration::from_millis(400));
-        assert!(
-            waited >= (first + second).mul_f64(0.8) && waited <= (first + second).mul_f64(1.2),
-            "two backoffs, ±20 %: {waited:?}",
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn an_idempotent_call_answering_on_a_retry_is_its_answer() {
-        let calls = AtomicU32::new(0);
-        let answered = retrying(2)
-            .run_idempotent(|_| async {
-                match calls.fetch_add(1, Ordering::Relaxed) {
-                    0 => Err(Refused),
-                    _ => Ok("tracked"),
-                }
-            })
-            .await;
-        assert!(matches!(answered, Ok("tracked")), "{answered:?}");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn an_attempt_past_its_timeout_is_given_up_and_its_token_cancelled() {
-        let cancelled = CancellationToken::new();
-        let seen = cancelled.clone();
-        let answered = policy(ResilienceConfig {
-            timeout: Duration::from_millis(300),
-            retries: None,
-            breaker_window: None,
-            ..ResilienceConfig::default()
-        })
-        .run(|cancel| async move {
-            let spawned = cancel.clone();
-            tokio::spawn(async move {
-                spawned.cancelled().await;
-                seen.cancel();
-            });
-            std::future::pending::<Result<(), Refused>>().await
-        })
-        .await;
-        assert!(
-            matches!(
-                answered,
-                Err(ResilienceError::TimedOut { timeout, .. }) if timeout == Duration::from_millis(300)
-            ),
-            "{answered:?}"
-        );
-        tokio::time::timeout(Duration::from_secs(1), cancelled.cancelled())
-            .await
-            .expect("work the call spawned is told the attempt was given up");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_timed_out_idempotent_call_is_attempted_again() {
-        let calls = AtomicU32::new(0);
-        let answered = policy(ResilienceConfig {
-            timeout: Duration::from_millis(100),
-            retries: Some(1),
-            breaker_window: None,
-            ..ResilienceConfig::default()
-        })
-        .run_idempotent(|_| async {
-            if calls.fetch_add(1, Ordering::Relaxed) == 0 {
-                std::future::pending::<()>().await;
-            }
-            Ok::<_, Refused>("second")
-        })
-        .await;
-        assert!(matches!(answered, Ok("second")), "{answered:?}");
-    }
-
-    /// The unit's deadline, ambient, bounds every attempt before the policy's
-    /// own timeout does, and an attempt it cut counts in the breaker.
-    #[tokio::test(start_paused = true)]
-    async fn an_attempt_ends_by_the_units_deadline_and_counts_as_timed_out() {
-        let policy = policy(ResilienceConfig {
-            timeout: Duration::from_secs(5),
-            retries: None,
-            breaker_window: Some(1),
-            breaker_failures: 1,
-            ..ResilienceConfig::default()
-        });
-        let left = Duration::from_millis(300);
-        let started = tokio::time::Instant::now();
-        let given_up = nest_rs_core::__private::with_deadline(
-            Some(started + left),
-            policy.run(|_| std::future::pending::<Result<(), Refused>>()),
-        )
-        .await;
-        assert!(
-            matches!(given_up, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == left),
-            "{given_up:?}"
-        );
-        assert_eq!(started.elapsed(), left, "the deadline, not the 5 s timeout");
-        let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
-        assert!(
-            matches!(refused, Err(ResilienceError::Open { .. })),
-            "the cut attempt opened the breaker: {refused:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn no_retry_starts_whose_wait_ends_past_the_units_deadline_nor_any_call_with_none_left() {
-        let calls = AtomicU32::new(0);
-        let failing = || async {
-            calls.fetch_add(1, Ordering::Relaxed);
-            Err::<(), _>(Refused)
-        };
-        let policy = retrying(2);
-        let now = tokio::time::Instant::now();
-        let answered = nest_rs_core::__private::with_deadline(
-            Some(now + Duration::from_millis(100)),
-            policy.run_idempotent(|_| failing()),
-        )
-        .await;
-        assert!(matches!(answered, Err(ResilienceError::Failed(Refused))));
-        assert_eq!(
-            calls.load(Ordering::Relaxed),
-            1,
-            "the first retry waits about 200 ms, past the 100 ms left"
-        );
-
-        let spent = nest_rs_core::__private::with_deadline(
-            Some(tokio::time::Instant::now()),
-            policy.run_idempotent(|_| failing()),
-        )
-        .await;
-        assert!(
-            matches!(spent, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
-            "{spent:?}"
-        );
-        assert_eq!(
-            calls.load(Ordering::Relaxed),
-            1,
-            "a unit out of time sends nothing"
-        );
-    }
-
-    /// A wait the call's error asks, through a `Problem` in its chain, is waited
-    /// whole before the retry, stretched by a fifth at most.
-    #[tokio::test(start_paused = true)]
-    async fn a_wait_the_calls_error_asks_is_honoured_before_its_retry() {
-        let calls = AtomicU32::new(0);
-        let started = tokio::time::Instant::now();
-        let answered = retrying(1)
-            .run_idempotent(|_| async {
-                match calls.fetch_add(1, Ordering::Relaxed) {
-                    0 => Err(Throttled(
-                        Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(1),
-                    )),
-                    _ => Ok("answered"),
-                }
-            })
-            .await;
-        assert!(matches!(answered, Ok("answered")), "{answered:?}");
-        let waited = started.elapsed();
-        assert!(
-            waited >= Duration::from_secs(1) && waited <= Duration::from_millis(1_200),
-            "{waited:?}"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn an_open_breaker_refuses_at_once_naming_its_wait_and_ends_the_run() {
-        let calls = AtomicU32::new(0);
-        let policy = policy(ResilienceConfig {
-            retries: Some(5),
-            breaker_window: Some(2),
-            breaker_failures: 2,
-            breaker_open: Duration::from_secs(30),
-            ..ResilienceConfig::default()
-        });
-        let answered = policy
-            .run_idempotent(|_| async {
-                calls.fetch_add(1, Ordering::Relaxed);
-                Err::<(), _>(Refused)
-            })
-            .await;
-        assert!(
-            matches!(answered, Err(ResilienceError::Open { .. })),
-            "the breaker opened under the run: {answered:?}"
-        );
-        assert_eq!(
-            calls.load(Ordering::Relaxed),
-            2,
-            "no attempt past the one that opened it"
-        );
-
-        let refused = policy
-            .run(|_| async {
-                calls.fetch_add(1, Ordering::Relaxed);
-                Ok::<_, Refused>(())
-            })
-            .await;
-        let Err(ResilienceError::Open { retry_after, .. }) = refused else {
-            panic!("refused while open: {refused:?}");
-        };
-        assert!(retry_after <= Duration::from_secs(30), "{retry_after:?}");
-        assert_eq!(
-            calls.load(Ordering::Relaxed),
-            2,
-            "a refused call is never sent"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_full_bulkhead_refuses_the_call_beyond_its_slots() {
-        let policy = Arc::new(policy(ResilienceConfig {
-            concurrency: Some(1),
-            breaker_window: None,
-            ..ResilienceConfig::default()
-        }));
-        let release = Arc::new(tokio::sync::Notify::new());
-        let holding = {
-            let (policy, release) = (Arc::clone(&policy), Arc::clone(&release));
-            tokio::spawn(async move {
-                policy
-                    .run(|_| async move {
-                        release.notified().await;
-                        Ok::<_, Refused>(())
-                    })
-                    .await
-            })
-        };
-        tokio::task::yield_now().await;
-        let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
-        assert!(
-            matches!(refused, Err(ResilienceError::Full { .. })),
-            "{refused:?}"
-        );
-        release.notify_one();
-        assert!(holding.await.expect("the held call ends").is_ok());
-        assert!(policy.run(|_| async { Ok::<_, Refused>(()) }).await.is_ok());
-    }
-
-    /// A call meeting an open breaker is refused before it waits for a slot of
-    /// the full bulkhead, however long that wait would be.
-    #[tokio::test(start_paused = true)]
-    async fn an_open_breaker_refuses_before_any_wait_for_a_slot() {
-        let policy = policy(ResilienceConfig {
-            retries: None,
-            breaker_window: Some(1),
-            breaker_failures: 1,
-            concurrency: Some(1),
-            concurrency_wait: Duration::from_secs(60),
-            ..ResilienceConfig::default()
-        });
-        let held = policy.begin().await.expect("the one slot, while closed");
-        policy
-            .breaker
-            .as_ref()
-            .expect("a breaker")
-            .admit()
-            .expect("closed")
-            .settle(true);
-
-        let started = tokio::time::Instant::now();
-        let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
-        assert!(
-            matches!(refused, Err(ResilienceError::Open { .. })),
-            "{refused:?}"
-        );
-        assert_eq!(
-            started.elapsed(),
-            Duration::ZERO,
-            "no wait for the slot held"
-        );
-        drop(held);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn an_asked_wait_is_honoured_up_to_the_ceiling_and_past_it_ends_the_run() {
-        let policy = retrying(3);
-        let mut run = policy.begin().await.expect("a run");
-        let asked = Duration::from_secs(1);
-        let started = tokio::time::Instant::now();
-        let failed: Attempted<()> = Ok(((), Verdict::Failed { asked: Some(asked) }));
-        assert!(run.again(&failed).await);
-        let waited = started.elapsed();
-        assert!(
-            waited >= asked && waited <= asked.mul_f64(1.2),
-            "the ask, stretched by a fifth at most: {waited:?}"
-        );
-        let too_long: Attempted<()> = Ok((
-            (),
-            Verdict::Failed {
-                asked: Some(Duration::from_secs(3)),
-            },
-        ));
-        assert!(!run.again(&too_long).await, "past the 2 s ceiling");
-    }
-
-    /// Each retry adds one to the retries' counter, and each run ending on the
-    /// policy's refusal one to the refusals', by that refusal.
-    #[cfg(feature = "opentelemetry")]
-    #[tokio::test(start_paused = true)]
-    async fn retries_and_the_refusals_runs_end_on_are_counted() {
-        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
-        use opentelemetry_sdk::metrics::{
-            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
-        };
-
-        use crate::counters::{INSTANCE_ATTRIBUTE, REFUSAL_ATTRIBUTE, REFUSALS, RETRIES};
-
-        let exporter = InMemoryMetricExporter::default();
-        let provider = SdkMeterProvider::builder()
-            .with_reader(PeriodicReader::builder(exporter.clone()).build())
-            .build();
-        opentelemetry::global::set_meter_provider(provider.clone());
-
-        let failed = retrying(1)
-            .run_idempotent(|_| async { Err::<(), _>(Refused) })
-            .await;
-        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
-
-        let timed_out = policy(ResilienceConfig {
-            timeout: Duration::from_millis(100),
-            retries: None,
-            breaker_window: None,
-            ..ResilienceConfig::default()
-        })
-        .run(|_| std::future::pending::<Result<(), Refused>>())
-        .await;
-        assert!(matches!(timed_out, Err(ResilienceError::TimedOut { .. })));
-
-        let opening = policy(ResilienceConfig {
-            retries: None,
-            breaker_window: Some(1),
-            breaker_failures: 1,
-            ..ResilienceConfig::default()
-        });
-        let _first = opening.run(|_| async { Err::<(), _>(Refused) }).await;
-        let open = opening.run(|_| async { Ok::<_, Refused>(()) }).await;
-        assert!(matches!(open, Err(ResilienceError::Open { .. })));
-
-        let narrow = policy(ResilienceConfig {
-            concurrency: Some(1),
-            breaker_window: None,
-            ..ResilienceConfig::default()
-        });
-        let held = narrow.begin().await.expect("the one slot");
-        let full = narrow.run(|_| async { Ok::<_, Refused>(()) }).await;
-        assert!(matches!(full, Err(ResilienceError::Full { .. })));
-        drop(held);
-
-        provider.force_flush().expect("the export");
-        let exported = exporter
-            .get_finished_metrics()
-            .expect("the exported metrics");
-        let points = |name: &str| -> Vec<(String, u64)> {
-            let mut points: Vec<(String, u64)> = exported
-                .iter()
-                .flat_map(|resource| resource.scope_metrics())
-                .flat_map(|scope| scope.metrics())
-                .filter(|metric| metric.name() == name)
-                .flat_map(|metric| {
-                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                        panic!("a counter: {metric:?}");
-                    };
-                    sum.data_points()
-                        .map(|point| {
-                            let attribute = |key: &str| {
-                                point
-                                    .attributes()
-                                    .find(|kv| kv.key.as_str() == key)
-                                    .map(|kv| kv.value.to_string())
-                                    .unwrap_or_default()
-                            };
-                            assert_eq!(attribute(INSTANCE_ATTRIBUTE), "upstream");
-                            (attribute(REFUSAL_ATTRIBUTE), point.value())
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            points.sort();
-            points
-        };
-        assert_eq!(points(RETRIES), [(String::new(), 1)], "one call sent again");
-        assert_eq!(
-            points(REFUSALS),
-            [
-                ("full".to_owned(), 1),
-                ("open".to_owned(), 1),
-                ("timed_out".to_owned(), 1),
-            ],
-            "a failed call is the call's answer, no refusal of the policy's"
-        );
-    }
-
-    #[test]
-    fn a_first_wait_above_the_ceiling_is_refused_naming_both_variables() {
-        let refused = ResiliencePolicy::<Upstream>::new(&ResilienceConfig {
-            backoff_first: Duration::from_secs(3),
-            ..ResilienceConfig::default()
-        })
-        .expect_err("a first wait above the longest")
-        .to_string();
-        assert!(
-            refused.contains(&nest_rs_config::var_name(
-                "resilience__upstream",
-                "BACKOFF_FIRST_MS"
-            )) && refused.contains(&nest_rs_config::var_name(
-                "resilience__upstream",
-                "BACKOFF_CEILING_MS"
-            )),
-            "{refused}"
-        );
-    }
-
-    #[test]
-    fn more_failures_than_the_window_holds_is_refused_naming_both_variables() {
-        let refused = ResiliencePolicy::<Unnamed>::new(&ResilienceConfig {
-            breaker_window: Some(5),
-            breaker_failures: 6,
-            ..ResilienceConfig::default()
-        })
-        .expect_err("a breaker that never opens")
-        .to_string();
-        assert!(
-            refused.contains(&nest_rs_config::var_name("resilience", "BREAKER_FAILURES"))
-                && refused.contains(&nest_rs_config::var_name("resilience", "BREAKER_WINDOW")),
-            "{refused}"
-        );
+    async fn answering() -> Result<(), Refused> {
+        Ok(())
     }
 
     #[test]
@@ -942,5 +544,80 @@ mod tests {
                 nest_rs_config::var_name("resilience", "*")
             )
         );
+    }
+
+    /// A policy with no breaker says so by type, never as a breaker closed,
+    /// and refuses either switch; an age and probes mean nothing without a
+    /// breaker, as a slot's wait means nothing without slots, and build none.
+    #[tokio::test(start_paused = true)]
+    async fn a_policy_with_no_breaker_says_so_by_type_and_refuses_either_switch() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(ResilienceConfig {
+            breaker_window: None,
+            breaker_age: Some(Duration::from_secs(60)),
+            breaker_probes: 3,
+            ..ResilienceConfig::default()
+        });
+        assert!(policy.mechanisms.breaker.is_none());
+        assert_eq!(policy.breaker_state(), None);
+        assert_eq!(
+            policy.open_breaker(Duration::from_secs(10)),
+            Err(BreakerError::Off)
+        );
+        assert_eq!(
+            policy.open_breaker(Duration::ZERO),
+            Err(BreakerError::Off),
+            "no breaker before a duration it would not take"
+        );
+        assert_eq!(policy.close_breaker(), Err(BreakerError::Off));
+        assert_eq!(
+            BreakerError::Off.to_string(),
+            "the policy has no circuit breaker to switch"
+        );
+        assert!(policy.run(answering).await.is_ok());
+        assert!(lines.find(TARGET, crate::teller::MOVED).is_empty());
+    }
+
+    /// A manual opening for a duration `breaker_open` would not take in code
+    /// — none, or past its ceiling — is refused, never clamped: the breaker
+    /// stays as it was and files nothing, and the refusal names the open times
+    /// it takes and the field taking them, never the duration given. Anything
+    /// above none up to the ceiling is taken, a time under a second included.
+    #[tokio::test(start_paused = true)]
+    async fn a_manual_opening_outside_the_open_times_breaker_open_takes_is_refused_unclamped() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(ResilienceConfig::default());
+        let bounds = ResilienceConfig::BREAKER_OPEN.bounds();
+        assert!(
+            matches!(bounds.least(), nest_rs_config::Floor::AboveZero(_)),
+            "an open time is anything above none"
+        );
+        let most = bounds.unit().duration(bounds.most().count);
+        let tick = Duration::from_nanos(1);
+        for outside in [Duration::ZERO, most + tick, Duration::MAX] {
+            let refused = policy
+                .open_breaker(outside)
+                .expect_err("outside the open times");
+            assert_eq!(refused, BreakerError::OutOfRange { most });
+            let said = refused.to_string();
+            assert_eq!(
+                said,
+                format!(
+                    "a breaker opened by hand stays open for a time above zero, up to {most:?}, \
+                     the open times `{}` takes in code",
+                    ResilienceConfig::BREAKER_OPEN.field().path()
+                )
+            );
+            assert!(!said.contains(&format!("{outside:?}")), "{said}");
+        }
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+        assert!(lines.find(TARGET, crate::teller::MOVED).is_empty());
+        for taken in [tick, Duration::from_millis(500), most] {
+            assert_eq!(policy.open_breaker(taken), Ok(()), "{taken:?}");
+            assert_eq!(
+                policy.breaker_state(),
+                Some(BreakerState::Open { retry_after: taken })
+            );
+        }
     }
 }

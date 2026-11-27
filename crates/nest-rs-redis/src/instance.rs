@@ -9,11 +9,12 @@ use nest_rs_core::Instance;
 use crate::RedisConfig;
 
 /// The instance a connection was opened for: the name every line it files
-/// carries as `instance` — empty for the default one — and the namespace its
-/// variables are read under, which every refusal names them in.
+/// carries as `instance` — none for the default one, whose lines carry no
+/// `instance` — and the namespace its variables are read under, which every
+/// refusal names them in.
 #[derive(Clone, Debug)]
 pub(crate) struct RedisInstance {
-    name: &'static str,
+    name: Option<&'static str>,
     namespace: Cow<'static, str>,
 }
 
@@ -22,14 +23,18 @@ impl RedisInstance {
     /// `<PREFIX>_REDIS__CACHE__*` for `Cache`.
     pub(crate) fn of<I: Instance>() -> Self {
         Self {
-            name: I::NAME,
+            name: if I::NAME.is_empty() {
+                None
+            } else {
+                Some(I::NAME)
+            },
             namespace: instance_namespace::<I>(RedisConfig::NAMESPACE),
         }
     }
 
-    /// The `instance` field of every line: the marker's name, empty for the
-    /// default instance.
-    pub(crate) fn name(&self) -> &'static str {
+    /// The `instance` field of every line: the marker's name, and none for
+    /// the default instance — a field holding nothing is left out.
+    pub(crate) const fn name(&self) -> Option<&'static str> {
         self.name
     }
 
@@ -89,7 +94,7 @@ mod tests {
     #[test]
     fn the_default_instance_reads_the_crate_s_namespace_and_names_none() {
         let instance = RedisInstance::of::<Unnamed>();
-        assert_eq!((instance.name(), instance.namespace()), ("", "redis"));
+        assert_eq!((instance.name(), instance.namespace()), (None, "redis"));
         assert_eq!(
             instance.connect_timeout_var(),
             nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")
@@ -101,7 +106,7 @@ mod tests {
         let instance = RedisInstance::of::<Cache>();
         assert_eq!(
             (instance.name(), instance.namespace()),
-            ("cache", "redis__cache")
+            (Some("cache"), "redis__cache")
         );
         assert_eq!(
             instance.url_var(),

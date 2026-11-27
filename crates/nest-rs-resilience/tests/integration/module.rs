@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::{MissingDependencyError, injectable, instance, module};
-use nest_rs_resilience::{ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy};
+use nest_rs_resilience::{
+    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, ResilienceRefusal,
+};
 use nest_rs_testing::HeadlessApp;
 
 use crate::{held, quiet};
@@ -77,12 +79,12 @@ async fn a_pinned_instance_runs_on_its_pin_and_a_bare_one_on_the_defaults() {
 
     let given_up = tracking
         .carrier
-        .run(|_| std::future::pending::<Result<(), std::io::Error>>())
+        .run(std::future::pending::<Result<(), std::io::Error>>)
         .await;
     assert!(
         matches!(
             given_up,
-            Err(ResilienceError::TimedOut { timeout, .. }) if timeout == Duration::from_millis(100)
+            Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout == Duration::from_millis(100)
         ),
         "{given_up:?}"
     );
@@ -90,10 +92,16 @@ async fn a_pinned_instance_runs_on_its_pin_and_a_bare_one_on_the_defaults() {
     let started = tokio::time::Instant::now();
     let given_up = tracking
         .upstream
-        .run(|_| std::future::pending::<Result<(), std::io::Error>>())
+        .run(std::future::pending::<Result<(), std::io::Error>>)
         .await;
     assert!(
-        matches!(given_up, Err(ResilienceError::TimedOut { .. })),
+        matches!(
+            given_up,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::TimedOut { .. },
+                ..
+            })
+        ),
         "{given_up:?}"
     );
     assert_eq!(

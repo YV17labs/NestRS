@@ -177,8 +177,9 @@ pub mod health {
     pub use nest_rs_health::*;
 }
 
-/// Resilience: named policies around an outbound call — a timeout per attempt,
-/// retries for an idempotent call, a circuit breaker and a bulkhead.
+/// Resilience: `#[resilient]` and the named policies around an outbound call —
+/// a timeout per attempt, retries for an idempotent call, a circuit breaker
+/// read and switched by hand, a bulkhead and an outbound rate limit.
 #[cfg(feature = "resilience")]
 pub mod resilience {
     #[doc(no_inline)]
@@ -362,6 +363,9 @@ pub mod prelude {
 
     #[cfg(feature = "queue")]
     pub use nest_rs_queue::{processor, queue};
+
+    #[cfg(feature = "resilience")]
+    pub use nest_rs_resilience::resilient;
 
     #[cfg(feature = "seaorm")]
     pub use nest_rs_seaorm::expose;

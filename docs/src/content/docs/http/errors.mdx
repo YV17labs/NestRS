@@ -93,6 +93,15 @@ another protocol's body or an envelope of your own, implements
 error is mapped one way: a `ResponseError` written for a type that implements
 `ToProblem` does not compile.
 
+An error's `Display` is the operator's, never the client's: a driver's address,
+an account, a partner's URL and its token travel in it, and an
+`#[error(transparent)]` wrapper passes them through. So
+`HttpError::new(e, status)` answers `status`'s problem with no `detail`,
+whatever the status, `e` kept as its cause, and so does a `ResponseError` that
+writes no `as_response`. The sentence a client reads is one written for it: a
+`Problem`'s `with_detail("…")`, or `Problem::from(DecodeError::from(err))` for
+a decode of the client's own text.
+
 Either rendering keeps a `5xx`'s cause for the operator, and neither logs it
 itself. The edge files the error's whole chain once the answer is final,
 on `nest_rs::http`: at `error`, at `warn` behind a `503`, naming the route as the

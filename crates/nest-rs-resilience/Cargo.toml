@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Resilience for NestRS: named policies an app wraps around an outbound call — a timeout per attempt, retries for an idempotent call, a circuit breaker and a bulkhead — answered 503 with Retry-After."
+description = "Resilience for NestRS: #[resilient] runs a method calling a dependency under a named policy — a timeout per attempt, retries when it is idempotent, answers classified by keys, a fallback, a circuit breaker read and switched by hand, a bulkhead and an outbound token bucket — answered 503 with Retry-After; events and state readable in code."
 keywords = ["framework", "nestrs", "resilience", "circuit-breaker", "retry"]
 categories = ["web-programming", "asynchronous"]
 
@@ -24,29 +24,47 @@ reqwest = [
     "dep:reqwest-middleware",
     "nest-rs-reqwest/middleware",
     "dep:http",
+    "dep:http-body",
     "dep:async-trait",
 ]
-# A breaker's transitions, counted on the meter `OpenTelemetry::init()`
-# installs; the umbrella's `opentelemetry` feature forwards it weakly.
+# What a policy does, counted on the meter `OpenTelemetry::init()` installs,
+# and what it holds, observed there; the umbrella's `opentelemetry` feature
+# forwards it weakly.
 opentelemetry = ["dep:opentelemetry"]
 
 [dependencies]
+# `#[resilient]`, re-exported here: a method's body run under the policy a field
+# of `self` holds.
+nest-rs-resilience-macros.workspace = true
 # `ResilienceModule` is a `Module` generic over its `Instance`; a policy waits
-# through `within` and `Backoff`, and its refusal is a `Problem`.
+# through `WithinHeld`, core's bounded wait around a call it holds, and backs
+# off through `Backoff`, and its refusal is a `Problem`.
 nest-rs-core.workspace = true
 # `ResilienceModule` owns its `#[config]` (`ResilienceConfig`, namespace
 # `resilience`), read per instance from `<PREFIX>_RESILIENCE__*`.
 nest-rs-config.workspace = true
+# The data port, named for no ORM: an attempt of a call declared idempotent, or
+# replaced by a fallback, runs in a savepoint of the transaction its unit of
+# work holds (`Executor::savepoint`), rolled back when it fails.
+nest-rs-database.workspace = true
 # `ResilienceError`, the one error a policy answers.
 thiserror.workspace = true
-# The bulkhead's semaphore, and the clock a breaker and a timeout read.
+# The bulkhead's semaphores — its slots and its waiters' places — the clock a
+# breaker, a rate and a timeout read, the timers a run waits on, and the
+# broadcast channel a policy's events are told on, behind `ResilienceEvents`.
 tokio.workspace = true
 # The `CancellationToken` each attempt is handed, cancelled when it is given up.
 tokio-util.workspace = true
-# A breaker's transition is a `warn`, a retry a `debug`, on `nest_rs::resilience`.
+# A breaker's transition is a `warn`; a retry, one given up, a savepoint that
+# could not be settled, a wait for a token, a call the bulkhead or the rate
+# refuses and a fallback answering a `debug`, on `nest_rs::resilience`.
 tracing.workspace = true
-# The breaker's window — poison-free locking on every call it admits.
+# The breaker's window and the rate's count — poison-free locking on every call
+# a breaker admits and every attempt a rate counts.
 parking_lot.workspace = true
+# A run's futures, polled in place, each holding its call once; tokio and
+# `nest-rs-core` already build it.
+pin-project-lite.workspace = true
 # The module's factory answers in the container's error channel, and the
 # middleware hands its refusal to reqwest-middleware's `Error::Middleware`.
 anyhow.workspace = true
@@ -59,10 +77,14 @@ reqwest-middleware = { workspace = true, optional = true }
 nest-rs-reqwest = { workspace = true, optional = true }
 # The `Extensions` `Middleware::handle` takes.
 http = { workspace = true, optional = true }
+# The body `ResilienceMiddleware` hands back inside reqwest's own, read under
+# the policy until it ends; no type of it reaches this crate's API.
+http-body = { workspace = true, optional = true }
 # `Middleware` is an `async_trait`.
 async-trait = { workspace = true, optional = true }
-# The API crate alone: a transition records on the global meter, which
-# `OpenTelemetry::init()` installs and nothing else reads here.
+# The API crate alone: a policy's counters and the instruments its reads are
+# observed on sit on the global meter, which `OpenTelemetry::init()` installs
+# and nothing else reads here.
 opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -71,10 +93,11 @@ opentelemetry = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # The composition witnesses boot the documented wiring; the middleware's suite
 # sends real requests to a TLS double whose certificate a `TestAuthority`
-# issued. Path-only intra-workspace dev edges, per the manifest rule.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls", "ws"] }
-# Self dev-dependency: the suite runs with the middleware and the transitions'
-# counter on.
+# issued; a decorated subscription streams over the graphql-ws driver.
+# Path-only intra-workspace dev edges, per the manifest rule.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "tls", "ws"] }
+# Self dev-dependency: the suite runs with the middleware and the policy's
+# instruments on.
 nest-rs-resilience = { path = ".", features = ["reqwest", "opentelemetry"] }
 # A route answering a policy's refusal: `#[controller]` and `#[routes]` expand
 # into the guard and pipe chains each route runs.
@@ -88,6 +111,12 @@ nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-ws = { path = "../nest-rs-ws" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-queue = { path = "../nest-rs-queue" }
+# A decorated tick of a `#[scheduled]` block, run by the scheduler as an app's is.
+nest-rs-schedule = { path = "../nest-rs-schedule" }
+# A decorated listener of a `#[listeners]` block, called by the bus's emit.
+nest-rs-events = { path = "../nest-rs-events" }
+# A decorated indicator of an `#[indicators]` block, run by `HealthService::probe`.
+nest-rs-health = { path = "../nest-rs-health" }
 async-graphql.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -95,10 +124,25 @@ nest-rs-reqwest = { path = "../nest-rs-reqwest" }
 http.workspace = true
 reqwest.workspace = true
 reqwest-middleware.workspace = true
-# The transitions' counter is read off an in-memory exporter the test installs
+# Pins `#[resilient]`'s compile-time copies against `ResilienceConfig`
+# (tests/integration/config.rs): the `timeout` and `retries` ranges, over the
+# literal a method writes, and the table of the settings no method pins, each
+# refused naming the variable and the field that set it.
+nest-rs-codegen = { path = "../nest-rs-codegen" }
+syn.workspace = true
+# A policy's instruments are read off an in-memory exporter the test installs
 # as the global meter provider.
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# What a call pays its policy, measured in `benches/`.
+criterion.workspace = true
+# The breaker's published word, read with no lock, checked under every
+# interleaving and every value its memory orderings let a load read.
+loom.workspace = true
+
+[[bench]]
+name = "policy"
+harness = false
 
 [lints]
 workspace = true

@@ -32,6 +32,15 @@ nest-rs-core.workspace = true
 # app builds its client in their words.
 reqwest.workspace = true
 reqwest-middleware = { workspace = true, optional = true }
+# The handshake's failure beneath a reqwest error is rustls's, read by its type
+# so a line says an alert by its name: private, already in every build through
+# reqwest's `rustls`.
+rustls.workspace = true
+# A certificate webpki refuses in a way rustls has no word for — a certificate
+# authority's own presented as a server's — reaches a line as webpki's error
+# inside rustls's, read by its type: private, already in every build through
+# rustls.
+rustls-webpki.workspace = true
 # `Middleware` is an `async_trait`.
 async-trait = { workspace = true, optional = true }
 # The `Extensions` `Middleware::handle` takes.

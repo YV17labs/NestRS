@@ -1,0 +1,329 @@
+---
+title: Circuit breaker
+description: "When a resilience policy's breaker opens on a dependency's failures, how its probes close it, and how to read it and switch it by hand on each replica."
+sidebar:
+  order: 11.7
+---
+
+A [resilience policy](/fundamentals/resilience/) stops calling a dependency that
+keeps failing: its circuit breaker counts the outcome of every attempt and opens
+on enough failures. While it is open it refuses every call unsent, then probes
+the dependency before it lets calls through again. It is on by default, one per
+policy, shared by every caller in the process.
+
+```bash title=".env"
+NESTRS_RESILIENCE__UPSTREAM__BREAKER_WINDOW=20
+NESTRS_RESILIENCE__UPSTREAM__BREAKER_FAILURES=10
+NESTRS_RESILIENCE__UPSTREAM__BREAKER_OPEN_SECS=30
+NESTRS_RESILIENCE__UPSTREAM__BREAKER_AGE_SECS=600
+NESTRS_RESILIENCE__UPSTREAM__BREAKER_PROBES=3
+```
+
+The first three are the defaults. Here an outcome older than ten minutes stops
+counting, and three probes in a row close the breaker. By default no
+outcome ages, and one probe closes it.
+
+## How it opens and closes
+
+The breaker counts the latest `BREAKER_WINDOW` attempts. Once `BREAKER_FAILURES`
+of them failed, it opens: every call is refused at once, unsent, for
+`BREAKER_OPEN_SECS`. Then one call probes the dependency while the others are
+still refused, but for the calls of its policy the probe makes itself
+([a call inside an attempt of its own policy](/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy)). Its failure opens the breaker again, and its success closes it,
+or counts toward the [series of probes](#an-age-and-a-series-of-probes)
+`BREAKER_PROBES` asks for.
+
+On the defaults, the tenth failure among the latest twenty attempts opens it for
+thirty seconds: each client is answered `503` at once, its `Retry-After` counting
+down from `30`, instead of after a five-second timeout.
+
+**A share is written as a count.** "Half the calls failed, ten of them at
+least" is written `BREAKER_FAILURES=10` and `BREAKER_WINDOW=20`, the defaults: half of
+a full window, and never before ten calls failed. Until the window holds twenty
+outcomes it still waits for ten failures. Ten calls of which five failed leave
+it closed, where a rate counted from the tenth call opens it. A share `p`, never
+before `m` failures, is `BREAKER_FAILURES=m` and `BREAKER_WINDOW=m/p`: a
+quarter, never before five, is `5` of `20`.
+
+**A share, by an age.** A breaker configured by a time window, a failure rate and
+a minimum of calls maps to this one so: `BREAKER_AGE_SECS` is the time window,
+`BREAKER_WINDOW` is at least twice the minimum of calls, and `BREAKER_FAILURES` is
+the fewest failures that rate opens on, the rate times the minimum, rounded up.
+Half the calls failing, once at least ten calls answered, over sixty seconds, is
+`BREAKER_AGE_SECS=60`, `BREAKER_WINDOW=20` and `BREAKER_FAILURES=5`. The count is
+read as each failure is counted: the fifth failure within the age opens the
+breaker whatever answered between them, so it can open on a failure that rate
+would not open on yet. A window narrower than twice the minimum forgets by count
+failures that rate would still read. The defaults, ten failures of twenty, are
+not this mapping of half the calls after ten, which opens on five: a breaker
+moved here from that rule sets `BREAKER_FAILURES=5`.
+
+**An error the method does not count.** By default every `Err` is a failure, and
+a timeout always is. One a method's `record_if` refuses counts [in neither
+direction](/fundamentals/failures-and-fallbacks/#what-counts-as-a-failure): the
+breaker files, counts and tells nothing of it, and a probe answering it hands its
+turn to the next call, the breaker staying half-open.
+
+**An attempt its caller drops unanswered counts in neither direction**, as in a
+`select!` taking another branch. Under a unit's deadline — a request's, a job's, a tick's, a
+health check's — one dropped past its bound has its call read once more as it
+is dropped: an answer that came in time counts as itself, and one still to come
+as a timeout, whether the policy or the unit's edge cut it. Outside one, no instant ends the bound, and its
+caller's drop counts for nothing however late it comes. One that [another policy's
+timeout](/fundamentals/failures-and-fallbacks/#limits) cuts counts as a timeout,
+in a unit or outside one.
+
+**An answer counts in the phase its attempt was let through in.** One sent before
+an opening counts nowhere once the breaker has closed again, whether its probes
+closed it or `close_breaker()` did: a late success does not push a fresh failure
+out of the new window, and a late failure does not open it.
+
+**One probe at a time.** While a call holds the probe's turn, every other call
+is refused, told what is left of that probe's own bound. A call of the same
+policy the probe makes itself — a decorated method its body calls, a `run`
+there, a request through the policy's `ResilienceMiddleware` — is part of the
+probe, sharing its turn as [a call inside an attempt of its own
+policy](/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy) does: twenty pages a `sync()` reads one after
+the other on a probe are sent and counted as one outcome. The bound is the
+probe's timeout, its method's pin included, or what its unit's deadline leaves
+when that is sooner. While the probe's call is sent, or waits for its token of the
+[rate limit](/fundamentals/bulkhead-and-rate-limit/#the-rate-limit), that is
+what is left of the bound; once the bound has passed, a refused call is told a
+millisecond, the probe being given up at any moment. A probe whose response the
+caller of [`ResilienceMiddleware`](/fundamentals/resilience-middleware/) still
+holds has no timer to give it up: a call refused beside it is told the probe's
+whole bound, the same for as long as the response is held, until the caller has
+read or dropped it.
+
+## An age and a series of probes
+
+`BREAKER_AGE_SECS` forgets an outcome once it is older than the age, counted
+from its call's answer. The window forgets what is past the age each time it
+counts an outcome. So failures one short of opening the breaker, aged past it by
+a quiet spell, do not open it with the next. Unset, the window counts its latest
+attempts however old.
+
+`BREAKER_PROBES` asks that many probes in a row to succeed before the breaker
+closes, one at a time. A failed probe opens it again for its whole open time,
+and the series starts over. A probe whose call is cut at its timeout, at its
+unit's deadline or by another policy's timeout has failed. A probe whose call is
+never sent, because the rate refused it or its unit ran out of time first, counts
+as neither a success nor a failure. The same goes for one its caller drops
+unanswered, where that drop is no timeout, and the series keeps its count.
+
+Under a rate limit, an age leaves room for only so many of the policy's own
+attempts to answer within it of one another, each attempt running ten minutes at
+most. A `BREAKER_FAILURES` above that is opened by none of them, so the boot
+refuses it, naming `BREAKER_AGE_SECS`, `RATE_LIMIT` and `RATE_WINDOW_SECS`. The
+check bounds the policy's attempts alone: the body of a response
+`ResilienceMiddleware` hands its caller counts when it ends, outside it.
+
+## Read it and switch it by hand
+
+`ResiliencePolicy::breaker_state()` answers what a call arriving now meets, a
+`BreakerState`. It is `Closed`; `Open { retry_after }`, what is left of the open
+time, never zero; or `HalfOpen` once the open time has passed, whether the
+probe's turn is free, held or out. A policy with no breaker, `BREAKER_WINDOW=0`,
+answers `None`.
+
+```rust title="crates/features/src/posts/upstream.rs"
+use std::time::Duration;
+
+use nest_rs::resilience::{BreakerState, ResiliencePolicy};
+
+/// How long the upstream's breaker still refuses every call, while it is open.
+pub fn refused_for(upstream: &ResiliencePolicy<Upstream>) -> Option<Duration> {
+    match upstream.breaker_state()? {
+        BreakerState::Open { retry_after, .. } => Some(retry_after),
+        _ => None,
+    }
+}
+```
+
+`breaker_stats()` answers what the window counts now, a `BreakerStats`: its
+`outcomes`, its `failures`, and `failure_rate()` from `0.0` to `1.0`, `0.0` for a
+window holding none. It is `None` for a policy with no breaker. An outcome past
+`BREAKER_AGE_SECS` counts no more, and the window is forgotten as the breaker
+opens, so an open or half-open breaker reads none and a closed one counts afresh.
+With OpenTelemetry on, the window is the `nestrs.resilience.breaker.outcomes`
+instrument and the state `nestrs.resilience.breaker.status`
+([the metrics](/opentelemetry/metrics/#resilience-policies)).
+
+`open_breaker(duration)` takes the dependency out by hand, for a maintenance
+window or an outage you already know of. Every call is refused unsent for
+`duration`, counted from the call and replacing any open time the breaker had.
+Then the dependency is probed as after any opening. `close_breaker()` sends
+every call again. Each forgets the window, and a call let through before it
+changes nothing once it answers. A probe answering a success after an opening
+closes nothing, and one answering a failure after a closing opens nothing. A
+probe waiting for its token of the rate limit loses its turn.
+
+Each answers `Result<(), BreakerError>`: `Off` for a policy with no breaker, and
+`OutOfRange` for an opening `breaker_open` would not take in code, none or past
+an hour. A duration out of range is never clamped: the breaker is left as it
+was. Each moves this replica's breaker alone.
+
+## What it files
+
+Each transition is a `warn` on `nest_rs::resilience`,
+`circuit breaker changed state`, naming the `instance`, but for the default
+instance, and the `state` it entered: `open`, `half_open` or `closed`. Failures opening it add `failed`,
+`window`, `open_ms` and `error`: what the last of them failed on, the error's
+chain with every URL in it cut to its scheme, host and numeric port (see
+[what a line tells of a URL](/fundamentals/resilience-events/#what-a-line-tells-of-a-url)), or the timeout's sentence for an
+attempt given up at its bound. A switch by hand adds `manual = true`, and an
+opening its `open_ms`, filed even when it enters the state it found. Every
+duration is in whole milliseconds, rounded up.
+
+The read and the line answer two questions. The read says `HalfOpen` once the
+open time has passed, what a call arriving then meets. The line says `half_open`
+only when a probe's call is sent, what the dependency meets. Over a series of
+probes, `half_open` is filed as its first probe is sent and nothing between two
+probes. A failed probe files `open` with its `failed`, `window`, `open_ms` and
+`error`, and the last success `closed`. A probe given up before its call is sent files
+nothing. One its caller drops once its call is out, where that drop is no timeout,
+files `open` when no probe of its series has succeeded, and nothing after a
+success of the series. Each transition counts on `nestrs.resilience.breaker.transitions`, by
+`nestrs.resilience.breaker.state`, a manual one marked
+`nestrs.resilience.breaker.manual` ([the
+counters](/opentelemetry/metrics/#resilience-policies)).
+
+Code reads the same transitions on [`events()`](/fundamentals/resilience-events/#the-events),
+each a `ResilienceEvent::Transition`, in the order they took effect. What opened
+the breaker, its failures, the last one's error and the open time, is on the
+`warn` alone.
+
+## Test it
+
+What your client is told while the dependency is down takes one failure, not
+ten. The test's root pins the policy to open on the first, the test seeds the
+upstream's address where nothing listens, and the next call is refused unsent.
+
+```rust title="crates/features/tests/integration/posts/service.rs"
+use features::posts::{PostsConfig, PostsModule, PostsService, Upstream};
+use nest_rs::core::module;
+use nest_rs::resilience::{ResilienceConfig, ResilienceError, ResilienceModule, ResilienceRefusal};
+use nest_rs::testing::HeadlessApp;
+use uuid::Uuid;
+
+#[module(imports = [
+    ResilienceModule::for_root((Upstream, ResilienceConfig {
+        retries: None,
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..ResilienceConfig::default()
+    })),
+    PostsModule,
+])]
+struct OpeningOnOneFailure;
+
+fn nowhere() -> PostsConfig {
+    PostsConfig { upstream_url: "https://127.0.0.1:1".to_owned(), ..PostsConfig::default() }
+}
+
+#[tokio::test]
+async fn an_open_breaker_refuses_the_call_unsent() -> anyhow::Result<()> {
+    let app = HeadlessApp::builder()
+        .module::<OpeningOnOneFailure>()
+        .provide(nowhere())
+        .build_headless()
+        .await?;
+    let posts = app.container().get::<PostsService>().expect("provided");
+
+    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Failed(_))));
+    let refused = posts.preview(Uuid::nil()).await.err().and_then(|error| error.refusal());
+    assert!(matches!(refused, Some(ResilienceRefusal::Open { .. })));
+    Ok(())
+}
+```
+
+Or it takes none: opened by hand, the breaker refuses the call unsent; closed by
+hand, it sends the next, which fails where nothing listens. Beside the test
+above, on its root, which sends each call once, and its `nowhere`:
+
+```rust title="crates/features/tests/integration/posts/service.rs"
+use std::time::Duration;
+
+use nest_rs::resilience::{BreakerState, ResiliencePolicy};
+
+#[tokio::test]
+async fn a_preview_is_refused_while_opened_by_hand_and_sent_once_closed() -> anyhow::Result<()> {
+    let app = HeadlessApp::builder()
+        .module::<OpeningOnOneFailure>()
+        .provide(nowhere())
+        .build_headless()
+        .await?;
+    let posts = app.container().get::<PostsService>().expect("provided");
+    let upstream = app.container().get::<ResiliencePolicy<Upstream>>().expect("built");
+
+    upstream.open_breaker(Duration::from_secs(60))?;
+    let refused = posts.preview(Uuid::nil()).await.err().and_then(|error| error.refusal());
+    assert!(matches!(refused, Some(ResilienceRefusal::Open { .. })));
+
+    upstream.close_breaker()?;
+    assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Failed(_))));
+    Ok(())
+}
+```
+
+## Configuration
+
+Each key reads as [Resilience](/fundamentals/resilience/#configuration) says,
+under the policy's instance.
+
+| Key | Meaning |
+|---|---|
+| `BREAKER_WINDOW` | how many of the latest attempts the breaker counts — default `20`; from `1` to `10000`, `0` for no breaker |
+| `BREAKER_FAILURES` | how many failed attempts in the window open it — default `10`; from `1` to `BREAKER_WINDOW` |
+| `BREAKER_OPEN_SECS` | how long it refuses every call before one probes — default `30`; from `1` to `3600` (an hour), and in code anything above zero up to an hour |
+| `BREAKER_AGE_SECS` | how old an outcome grows, from its call's answer, before it stops counting — default none; from `1` to `86400` (a day), `0` for none, and in code anything above zero up to a day |
+| `BREAKER_PROBES` | how many probes in a row close it — default `1`; from `1` to `100` |
+
+The age and the probes mean nothing without a breaker, and build none. Beside a
+value out of its range, the boot refuses more failures than the window holds,
+and more than the rate lets answer within the age.
+
+## Limits
+
+- **A breaker is its replica's.** It opens on the failures its own replica saw,
+  and a switch by hand moves it alone. Taking a dependency out for the whole app
+  switches the breaker of every replica.
+- **An age costs memory and a lock.** With one set, each outcome the window holds
+  keeps the instant it answered beside its byte, for every outcome up to the
+  window's ceiling of ten thousand, and every outcome it counts takes the
+  breaker's lock, each success being forgotten at its own age. Letting a call
+  through, and refusing one while its open time runs, take no lock, age or not.
+- **The boot's check of an age under a rate counts the longest attempt.** It
+  takes each attempt as running up to ten minutes, the timeout's ceiling, which
+  a method may pin: a policy whose attempts all end sooner can still be built
+  with a breaker none of them opens. It takes each timeout as firing on time: a
+  runtime stalled past a timeout can let more failures answer within the age
+  than the check counts.
+- **A runtime stalled past a whole bound voids a live probe.** A probe whose
+  answer was due a whole bound of its own ago hands its turn to the next call,
+  and what it says late counts nowhere: so a stream that stops being read while
+  it awaits a decorated call holds the turn no longer than that, every other call
+  refused meanwhile and told a millisecond once the probe's bound has passed. A
+  probe whose runtime was stalled that long is voided the same way, the breaker
+  half-open as the new probe leaves it.
+- **A transition is told once the breaker's lock is let go, by one thread at a
+  time**, in the order the transitions took effect. A call that moves the breaker
+  while another thread is telling can return before its own transition's line is
+  filed, and a refusal can be told before the transition that caused it. A tracing
+  layer, a meter or a subscription may read or switch the breaker from inside a
+  transition's line: that switch is told once the line in hand is.
+- **A subscriber panicking out of a transition's line loses that transition's
+  count and event**, those behind it told with the next one made; one blocking
+  there for good keeps the turn, those behind it untold. No call waits for either,
+  but a process's first transition waits for a metrics export in progress, its
+  counter made at its first record, holding no lock of the breaker.
+
+## Going further
+
+- [Resilience](/fundamentals/resilience/) — the policy, the decorator, and what
+  the client is told.
+- [Bulkhead and rate limit](/fundamentals/bulkhead-and-rate-limit/) — the calls
+  run at once, and the attempts sent per window.
+- [Metrics](/opentelemetry/metrics/#resilience-policies) — the transitions'
+  counter an alert reads.

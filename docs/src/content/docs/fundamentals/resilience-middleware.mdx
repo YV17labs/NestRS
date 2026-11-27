@@ -1,0 +1,147 @@
+---
+title: Resilience middleware
+description: "Run every request your own reqwest client sends under a resilience policy: sent again when idempotent, counted in its breaker and its rate limit."
+sidebar:
+  order: 11.9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`ResilienceMiddleware` runs every request your own reqwest client sends under a
+[resilience policy](/fundamentals/resilience/). That client is the one you build
+for [calling another service](/fundamentals/calling-another-service/), and a
+method calling through it takes no `#[resilient]` of its own.
+
+```rust title="crates/features/src/posts/client.rs"
+use std::sync::Arc;
+
+use nest_rs::reqwest::ReqwestMiddleware;
+use nest_rs::resilience::{ResilienceMiddleware, ResiliencePolicy};
+
+use crate::posts::upstream::Upstream;
+
+pub fn upstream_client(
+    policy: Arc<ResiliencePolicy<Upstream>>,
+) -> reqwest_middleware::ClientWithMiddleware {
+    reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+        .with(ResilienceMiddleware::new(policy))
+        .with(ReqwestMiddleware::new())
+        .build()
+}
+```
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features resilience,reqwest
+cargo add reqwest@0.13 reqwest-middleware@0.5
+```
+
+The second line is there because the client is yours, as [calling another
+service](/fundamentals/calling-another-service/#install) says.
+
+## What it sends again
+
+It sends again only a request its method declares idempotent (`GET`, `HEAD`,
+`PUT`, `DELETE`, `OPTIONS`, `TRACE`, `QUERY`) or one carrying an
+`Idempotency-Key`, and only when its body can be sent twice.
+
+A transport error, a timeout, and a `408`, `429`, `500`, `502`, `503` or `504`
+are attempted again and count in the breaker. Any other answer is the
+dependency's. A `429`'s or a `503`'s `Retry-After` is waited whole, whether in
+seconds or an HTTP-date counted from the answer's own `Date`, so no clock skew
+enters. One past `BACKOFF_CEILING_MS` ends the run with that answer. An answer
+sent again is dropped unread before the wait for its retry, so no wait holds its
+connection or its stream. The last answer comes back as it came; a refusal is a
+`reqwest_middleware::Error::Middleware`.
+
+Each request it hands on is one attempt of the policy, and the rate limit, a
+token bucket, takes one token for it. A redirect the client follows is sent inside it ([what an attempt
+is](/fundamentals/bulkhead-and-rate-limit/#what-an-attempt-is)).
+
+<Aside type="caution">
+The resilience middleware goes before `ReqwestMiddleware`: each attempt is then
+a client span of its own, numbered by `http.request.resend_count`. Added after
+it, it refuses every request, unsent, with an error saying so.
+</Aside>
+
+## What it tells
+
+What it does is told as the policy's own: its [lines](/fundamentals/resilience-events/#the-lines)
+on `nest_rs::resilience`, its [events](/fundamentals/resilience-events/) and its counters. Each names the policy's
+`instance`, but the default instance's, and none names a host or a method: a request the middleware runs
+comes from no decorated method, so two clients sharing a policy are told apart
+by nothing it files. Give each client a policy of its own, one instance per
+dependency.
+
+A failure rides the retry's line, its event and the breaker's opening as its
+chain, and never the request's address: a transport error is said [by reqwest's
+kind and the causes that can be
+read](/fundamentals/resilience-events/#a-reqwest-error-on-a-line), never a word the
+dependency wrote, and any URL another middleware's error quotes [is cut to its
+origin](/fundamentals/resilience-events/#what-a-line-tells-of-a-url). A status is
+told by its code alone (`the dependency answered 503`), never a header or a body.
+
+## The answer's body
+
+The policy covers the body too, read as it comes and never buffered. The
+response is reqwest's own; until its body ends it holds the run's slot of the
+bulkhead, the breaker's verdict and what the head left of the attempt's timeout.
+
+That rest is a budget of waiting, shared by every read of the body. A read
+counts against it only while it waits for a part that has not come, until the
+transport signals one. The time you take between two reads counts for nothing,
+so a reader slower than the dependency is never cut.
+
+- Read to its end, the answer counts as its head did.
+- A read that fails counts as a failure in the breaker.
+- A read still waiting once the budget is spent is given up there, and counts
+  as a timeout in the breaker. `bytes()`, `chunk()` and the others answer
+  reqwest's error, whose chain holds the `ResilienceError::Refused`, its
+  refusal `ResilienceRefusal::TimedOut`, a request
+  given up before its head carries, and a line says that cut by the policy's own
+  sentence.
+- Dropped before its end, the answer counts as its head did. Three cases differ: a
+  read you abandoned, in a `select!` or under a timeout of your own, that has
+  waited past the budget; a read still waiting when the edge cuts its unit at its
+  deadline (a request's, a job's, a health check's), whatever time you took of
+  your own before that read; and a read still waiting as another policy's timeout
+  drops it, the one its reader runs under. The body is read once more as it is
+  dropped: a part that came counts as the head did, a read that fails as a
+  failure, and a part the dependency still owes as a timeout. The budget alone
+  bounds a read begun at the deadline or after it, and a body handed on past its
+  unit, as by a handler answering the response's stream: dropped with that budget
+  unspent, the answer counts as its head did.
+- A panic while the body is read counts as a failure in the breaker, then
+  unwinds on.
+
+A request sent inside an attempt of its own policy, from a `policy.run(…)` or a
+method `#[resilient]` with that policy, is a call that attempt makes: it shares
+what the attempt holds and counts in it, its body included, as [a call inside an
+attempt of its own policy](/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy) does.
+
+## Test it
+
+`nest_rs::testing::HttpsPeer` stands in for the upstream: an HTTPS peer on
+loopback presenting a `TestAuthority` certificate. It answers each request from
+a script, `PeerAnswer::status(503).header("retry-after", "1")` then
+`PeerAnswer::status(200)`, and keeps every request's head. A test then asserts
+what was sent again and what each attempt carried.
+
+## Limits
+
+- A body whose reads wait for the dependency longer than `TIMEOUT_MS` in all is
+  cut there, and the cut counts against the dependency. An event stream idles
+  between events, and a slow origin trickles a download: build such a client
+  without this middleware, or under a policy of its own.
+- The timeout bounds the dependency, never you. A response you keep unread, or
+  read slowly, keeps its slot for as long as you take, and a probe's keeps the
+  half-open breaker's one turn: read it or drop it. A call refused meanwhile is
+  told the probe's whole bound, however long the response has been held.
+
+## Going further
+
+- [Resilience](/fundamentals/resilience/) — the policy and the settings the
+  middleware runs every request under.
+- [Calling another service](/fundamentals/calling-another-service/) — the trace
+  and the client span every request of your client carries.

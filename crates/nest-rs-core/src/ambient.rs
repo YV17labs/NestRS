@@ -129,9 +129,9 @@ pub fn with_ambient_from<T: AmbientValue, F: Future>(
 /// [`UnitContext::deadline`](crate::UnitContext::deadline) reads: ambient for
 /// every unit its edge cuts at a deadline — an HTTP request, a WebSocket
 /// message, a GraphQL operation, an MCP operation, a job attempt, a tick, a
-/// listener call — so work inside it can stop waiting before the cut. A
-/// [`Batch`](Continuation::Batch), which the unit waits on, keeps it; every
-/// other continuation drops it.
+/// listener call, a health indicator's check — so work inside it can stop
+/// waiting before the cut. A [`Batch`](Continuation::Batch), which the unit
+/// waits on, keeps it; every other continuation drops it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deadline(pub Instant);
 
@@ -150,6 +150,13 @@ pub fn with_deadline<F: Future>(at: Option<Instant>, fut: F) -> impl Future<Outp
         },
         fut,
     )
+}
+
+/// The running unit's [`Deadline`], read without holding it, or `None` where it
+/// runs under none.
+pub fn deadline() -> Option<Instant> {
+    request_scope::current_request_ctx(|ctx| ctx.ambient.read(|deadline: &Deadline| deadline.0))
+        .flatten()
 }
 
 impl AmbientValue for Deadline {
@@ -237,6 +244,13 @@ impl Entries {
         let id = TypeId::of::<T>();
         let held = self.iter().find(|held| held.id == id)?;
         Arc::clone(&held.value).downcast::<T>().ok()
+    }
+
+    /// What `read` makes of the `T` held, without holding it.
+    pub(crate) fn read<T: AmbientValue, R>(&self, read: impl FnOnce(&T) -> R) -> Option<R> {
+        let id = TypeId::of::<T>();
+        let held = self.iter().find(|held| held.id == id)?;
+        held.value.downcast_ref::<T>().map(read)
     }
 
     pub(crate) fn is_empty(&self) -> bool {

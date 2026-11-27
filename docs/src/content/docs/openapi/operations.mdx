@@ -206,7 +206,7 @@ HTTP/1.1 200 OK
 deprecation: @1791417600
 ```
 
-The value is a date because the header is one: a version (`"7.1"`) is a
+The value is a date because the header is one: a version (`"2.1"`) is a
 compile error. Rust's own `#[deprecated]` on a handler or a controller is
 refused too — it deprecates the method for Rust callers, and the framework is
 the only one — and the refusal names `deprecated = "…"`. A handler's `Err` is

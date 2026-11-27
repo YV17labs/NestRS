@@ -133,16 +133,47 @@ impl JobProducer for Filing {
 struct Keeping(Mutex<Vec<OutboxRecord>>);
 
 impl DatabaseExecutor for Keeping {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for Keeping {
+    fn after_commit(&self, _work: nest_rs_database::Deferred) {
+        unreachable!("no test holds work on this unit")
     }
 
-    fn write_outbox(
-        &self,
-        records: &mut dyn Iterator<Item = OutboxRecord>,
-    ) -> Option<BoxFuture<'_, Result<(), OutboxError>>> {
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a savepoint on this unit")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        Some(self)
+    }
+}
+
+impl nest_rs_database::Outbox for Keeping {
+    fn write(&self, records: Vec<OutboxRecord>) -> BoxFuture<'_, Result<(), OutboxError>> {
         self.0.lock().expect("lock").extend(records);
-        Some(Box::pin(std::future::ready(Ok(()))))
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+impl nest_rs_database::OutboxKept for Keeping {
+    fn remove<'a>(
+        &'a self,
+        _queue: &'a str,
+        _id: uuid::Uuid,
+    ) -> BoxFuture<'a, Result<bool, OutboxError>> {
+        unreachable!("no test cancels a job on this unit")
+    }
+
+    fn remove_unique<'a>(
+        &'a self,
+        _queue: &'a str,
+        _key: &'a str,
+    ) -> BoxFuture<'a, Result<bool, OutboxError>> {
+        unreachable!("no test cancels a job on this unit")
     }
 }
 

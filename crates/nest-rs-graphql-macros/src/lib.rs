@@ -81,7 +81,8 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// decide granting nothing, and a row built for another caller resolves for no
 /// one. Carry the row (`Model`) on the event and build the wire row in the
 /// stream. The method is a `fn` or an
-/// `async fn` returning `impl Stream<Item = T>`, optionally behind a
+/// `async fn` returning `impl Stream<Item = T>` or a stream a type names
+/// (`BoxStream<'static, T>`), under any posture, optionally behind a
 /// literally-spelled `Result<…>`; an aliased `Result` is a compile error that
 /// names itself.
 ///
@@ -107,6 +108,32 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// interceptors (on a root field the app's and the resolver's, then the
 /// method's; on a field resolver its own alone), the
 /// per-argument pipes, then the inherent method.
+///
+/// **A method keeps every attribute `#[operations]` does not consume**, as
+/// written and in order, as a route's handler does: a `#[tracing::instrument]`
+/// spans the inherent method's body and names its own `self` and parameters —
+/// the arguments a pipe already converted, never those of a caller a guard or
+/// the gate refused, and `err` records the method's own error — a
+/// `#[resilient]`, under any name or any `#[cfg_attr]`, runs that body under
+/// its policy, an app's own attribute named `resilient` is the app's, and a
+/// `deny`, `warn` or `expect`, plain or under a `#[cfg_attr]`, holds that body.
+/// The delegating method carries only what describes a field to
+/// async-graphql, on the method as on each parameter: `#[graphql(…)]`, which
+/// leaves the inherent method, the docs, each `#[cfg]` — one inside a
+/// `#[cfg_attr]` unfolded — and each `#[allow]`, an `#[expect]` as an
+/// `#[allow]` of the same lints, since it trips some of them and not others.
+/// A `#[graphql(…)]` inside a `#[cfg_attr]` is refused: async-graphql would
+/// never read it. Rust's `#[deprecated]` is refused, plain or under a
+/// `#[cfg_attr]`, as on a route's handler: the field is the method's only
+/// caller, and a client reads a field's deprecation off the schema, which
+/// `#[graphql(deprecation = "…")]` writes.
+///
+/// What a field answers is read as async-graphql reads it: fallible when
+/// spelled `Result<…>` or `FieldResult<…>`, its error then answered by its
+/// type. A `Result` under another name is the field's GraphQL type whole,
+/// refused where async-graphql cannot answer its error — a `#[resilient]`
+/// operation's `ResilienceError<E>` among them, which is spelled out — by one
+/// sentence at the return type, ahead of the bounds rustc then finds unmet.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {

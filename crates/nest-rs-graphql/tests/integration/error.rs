@@ -5,6 +5,7 @@
 //! from the response's errors where the operation or a subscription's item
 //! answers — and a filter answering it as the caller's files none.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -35,6 +36,15 @@ impl ToProblem for LedgerDown {
         Some(Problem::new(503, code::UNAVAILABLE))
     }
 }
+
+/// What the ledger's answer held, which serde quotes.
+const LEDGER_ANSWERED: &str = "sk_live_51H";
+
+/// A failure to read the ledger's answer as a feature sharing it keeps it:
+/// serde_json's error is no `Clone`, so behind an `Arc`.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("the ledger's answer could not be read")]
+struct Unread(#[source] Arc<serde_json::Error>);
 
 /// Answers any failure as the caller's `409`.
 #[injectable]
@@ -98,6 +108,13 @@ impl LedgerResolver {
     #[public]
     async fn failed(&self) -> std::result::Result<i32, std::io::Error> {
         settled()
+    }
+
+    #[query]
+    #[public]
+    async fn unread(&self) -> std::result::Result<i32, Unread> {
+        let quoted = serde_json::from_str::<i32>(&format!("\"{LEDGER_ANSWERED}\""));
+        Err(Unread(Arc::new(quoted.expect_err("a string is no number"))))
     }
 
     #[query]
@@ -224,6 +241,32 @@ async fn a_withheld_chain_is_filed_naming_its_root_field() {
         assert!(!body.to_string().contains(LEDGER_REFUSED), "{body}");
         assert_names(&logs, "graphql operation failed", "query", field);
     }
+}
+
+/// A decode failure a field's error shares behind a pointer is no payload its
+/// caller sent: the field answers opaquely, never `INVALID_ARGUMENT`, and its
+/// chain is filed without the value.
+#[tokio::test]
+async fn a_decode_failure_shared_behind_a_pointer_is_answered_opaquely_and_filed() {
+    let app = boot().await;
+    let logs = LogCapture::install();
+    let body = post(&app, "{ unread }").await;
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{body}"
+    );
+    assert!(!body.to_string().contains("invalid type"), "{body}");
+
+    let line = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+    assert_eq!(line.level, "error");
+    assert_eq!(
+        line.field("error").as_deref(),
+        Some(
+            "the ledger's answer could not be read: invalid type: a string, expected i32 at line \
+             1 column 13"
+        ),
+    );
+    assert!(!format!("{body} {line:?}").contains(LEDGER_ANSWERED));
 }
 
 /// `problem_error` in a body keeps the chain its `5xx` withholds for the site,

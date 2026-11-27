@@ -153,3 +153,27 @@ owner's "Tout faire" of 2026-10-28.
 2026-11-05), so "what a caller opened itself" above is a pool, or a `db.begin()`
 the framework never sees: a push beside one reads the ambient handle, which is
 the unit's, and a pool files it at once. Nothing else about that line moved.
+
+## 2026-11-26 — the outbox is a transaction's, and what a cancel reaches is the pool's too
+
+The first entry hands the sealed jobs to `Executor::write_outbox` of the ambient
+executor, and the published release's trait handed a cancel to `remove_outbox` and
+`remove_outbox_unique`, each a default answering `None`. The port's `Executor` now
+says what a handle holds, and nothing a
+driver owes has a default (`resilience-policy.md`, this date): a driver leaving its
+outbox out filed every job at once, its rollback leaving them behind. The outbox
+follows that answer, every method required:
+
+- **A push writes into the `Outbox` a transaction answers**
+  (`HeldTransaction::outbox`), its `write` beside the two removals; a handle answering
+  `None` keeps none, and its jobs are filed at once.
+- **What a cancel reaches on the pool is `OutboxKept`** (`HeldPool::outbox`):
+  `remove` and `remove_unique`, a record a committed unit wrote and no relay has
+  filed.
+- **The port builds the records, a `Vec`, once a transaction answered an outbox**:
+  a record is sealed only once an outbox takes it, so a push filed at once still
+  seals nothing twice, where the first entry handed `write_outbox` records "built as
+  they are read".
+- **The pool a boundary hands on is its after-commit work's alone**: the first
+  entry's "to a step out of its transaction" was `Executor::non_transactional`,
+  which is gone.

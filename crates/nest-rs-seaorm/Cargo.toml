@@ -23,8 +23,8 @@ default = []
 # (through `CrudService::access`) and `#[crud]`'s error mapping. The HTTP edge
 # runs each request's unit of work through the port itself. A headless app — a
 # worker, a scheduler — leaves it off and links no HTTP stack.
-# `nest-rs-authz/http` is forwarded because a bound route arms
-# `nest_rs_authz::http::Authorize`, its class gate and the reads it opens.
+# `nest-rs-authz/http` is forwarded because a bound route's posture gates on
+# the ability `AbilityGuard`'s HTTP entry attaches.
 http = [
     "dep:nest-rs-http",
     "nest-rs-authz/http",
@@ -168,6 +168,9 @@ nest-rs-mcp = { path = "../nest-rs-mcp" }
 # The `worker` e2e runs a `#[processor]` attempt over the binding, where the
 # job's timeout meets its commit.
 nest-rs-queue = { path = "../nest-rs-queue" }
+# The `resilience` e2e runs a policy's attempts over the binding, each in a
+# savepoint of its unit's transaction.
+nest-rs-resilience = { path = "../nest-rs-resilience" }
 # `tokio-sync` serves a tokio lock as async-graphql's own feature does for an app
 # turning it on, so the suite answers a field through one.
 async-graphql = { workspace = true, features = ["tokio-sync"] }

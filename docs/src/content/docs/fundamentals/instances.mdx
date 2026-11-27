@@ -32,9 +32,9 @@ default's `Arc<Resource>` — Redis is one: `RedisModule<Cache>` opens
 `Arc<RedisConnection<Cache>>`. Each instance pins its config once; two
 instances never contest.
 
-The import is written as a type, as everywhere Rust writes one. An app written
-for 7.0 spells it `RedisModule::<Cache>`: that still compiles, and `#[module]`
-warns at its `::` with the spelling to write. 8.0 refuses it.
+The import is written as a type, as everywhere Rust writes one: written with
+the turbofish, `RedisModule::<Cache>`, it is refused at its `::` with the
+spelling to write.
 
 A module generic over the instance is written by hand
 (`impl<I: Instance> Module for …`), since `#[module]` is not generic:

@@ -46,7 +46,7 @@ the app's composition, and the unit check reads the declaring crate's name.
   `nestrs_kafka_streams`) share `EnvFilter` matches, as `tokio` and
   `tokio_util` do. The unit check refuses the shorter's target under the
   longer's root, which is all a framework can hold.
-- A community namespace can collide with a first-party one added later in 7.x
+- A community namespace can collide with a first-party one added in a later minor
   (a `nestrs-mail` taking `MAIL` before a first-party mail crate): the boot
   refuses the pair (`SharedNamespace`). A new first-party namespace is a new
   crate, which the owner decides, and that decision checks crates.io for

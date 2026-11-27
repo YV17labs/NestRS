@@ -11,7 +11,7 @@ struct PostsController;
 impl PostsController {
     #[get("/")]
     #[public]
-    #[deprecated(since = "7.1.0", note = "use `GET /v2/posts`")]
+    #[deprecated(since = "2.1.0", note = "use `GET /v2/posts`")]
     async fn list(&self) -> String {
         String::new()
     }

@@ -45,7 +45,8 @@ config's that the word list cannot know — `Lock` on Redis reads `redis__lock`,
 which a package binding Redis to its own lock port may declare — is refused as
 a shared namespace, and two markers reading one name are refused at first use.
 Every refusal names its instance's variables, and every line a connection
-files carries an `instance` field.
+files carries an `instance` field — a named instance's, the default's none
+(`resilience-policy.md`, 2026-11-27).
 
 **A module generic over an instance is written by hand.** `#[module]` submits a
 `static` descriptor, which cannot be generic, so it refuses a generic struct and
@@ -270,9 +271,10 @@ module was already used as a type. `imports` now reads an entry as an
 expression first, for `for_root(..)`, then as a type, so `RedisModule<Cache>`
 is spelled as the field injecting its connection spells `RedisConnection<Cache>`.
 Decided on Elegance, at no cost to the others: the expansion is the same type.
-**The turbofish warns through 7.x and 8.0 refuses it.** Refusing it in 7.1 turns
-every 7.0 app that followed the docs into a compile error, the break
-`semver-7x.md` holds absolute for decorator grammar. The warning is the one a
+**The turbofish warns through the published major and the next major refuses
+it.** Refusing it in a minor turns every app that followed the docs into a
+compile error, the break
+`semver.md` holds absolute for decorator grammar. The warning is the one a
 stable proc macro can raise, a `#[deprecated]` item the expansion uses at the
 developer's `::`, held by `nest-rs-macro-hygiene`'s snapshot, and `just lint`'s
 `-D warnings` keeps the framework's own tree on the type spelling. The parse
@@ -287,3 +289,16 @@ day one does.
 (`ResilienceModule::of(Upstream)`), a second seam beside `for_root`
 (`container.md`); a type alias per instance in the docs, a name that hides the
 marker it imports.
+
+## 2026-11-26 — the turbofish refused in the unreleased line
+
+"The turbofish warns through the published major and the next major refuses it"
+is now true of this line, which holds breaks and is a major (`semver.md`,
+2026-11-25): `#[module]` refuses
+`RedisModule::<Cache>` in `imports` at its `::`, one `compile_error!` naming
+the type to write, the module still read as its type so nothing else is said.
+The `#[deprecated]` item the expansion used goes, and the snapshot it was held by
+pins the refusal. Superseded: "Refusing it in a minor turns every app that
+followed the docs into a compile error, the break `semver.md` holds absolute
+for decorator grammar" — the grace period it gave is the one the 2026-11-25
+entry refuses beside a break.

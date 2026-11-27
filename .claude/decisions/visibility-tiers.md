@@ -148,7 +148,7 @@ the `Clone`, `Copy`, `Eq` shape a GraphQL enum requires. `#[expose]` stays SeaOR
 **2026-11-04 — an item has one path, and that holds of a module's too.** The
 review of the entries above found `nest_rs::core::container::Container` beside
 `nest_rs::core::Container`: `nest_rs_core` re-exported at its root what its public
-modules also held, about ninety items, each frozen twice until 8.0, and the crate
+modules also held, about ninety items, each frozen twice until the next major, and the crate
 root is the only path any page teaches. The refusal in this file's first list,
 "making those modules private was refused: their paths are read", held for the
 paths it cited, and one of those is gone. So, with the owner's agreement ("Tout faire

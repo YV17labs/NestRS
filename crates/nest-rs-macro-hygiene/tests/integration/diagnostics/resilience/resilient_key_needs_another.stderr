@@ -1,0 +1,35 @@
+error: #[resilient] `retry_if` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retry_if`
+  --> tests/integration/diagnostics/resilience/resilient_key_needs_another.rs:35:26
+   |
+35 |     #[resilient(carrier, retry_if = |error| error.undefined())]
+   |                          ^^^^^^^^
+
+error: #[resilient] `retry_ok_if` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retry_ok_if`
+  --> tests/integration/diagnostics/resilience/resilient_key_needs_another.rs:40:26
+   |
+40 |     #[resilient(carrier, retry_ok_if = undefined)]
+   |                          ^^^^^^^^^^^
+
+error: #[resilient] `fallback_if` needs `fallback`: it says which errors the fallback answers in place of, and this method names none — name the method answering, `fallback = stale`, or drop `fallback_if`
+  --> tests/integration/diagnostics/resilience/resilient_key_needs_another.rs:45:26
+   |
+45 |     #[resilient(carrier, fallback_if = |_| true)]
+   |                          ^^^^^^^^^^^
+
+error: #[resilient] `retries` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retries`
+  --> tests/integration/diagnostics/resilience/resilient_key_needs_another.rs:50:26
+   |
+50 |     #[resilient(carrier, retries = 3, retry_if = |_| true, fallback_if = |_| true)]
+   |                          ^^^^^^^
+
+error: #[resilient] `retry_if` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retry_if`
+  --> tests/integration/diagnostics/resilience/resilient_key_needs_another.rs:50:39
+   |
+50 |     #[resilient(carrier, retries = 3, retry_if = |_| true, fallback_if = |_| true)]
+   |                                       ^^^^^^^^
+
+error: #[resilient] `fallback_if` needs `fallback`: it says which errors the fallback answers in place of, and this method names none — name the method answering, `fallback = stale`, or drop `fallback_if`
+  --> tests/integration/diagnostics/resilience/resilient_key_needs_another.rs:50:60
+   |
+50 |     #[resilient(carrier, retries = 3, retry_if = |_| true, fallback_if = |_| true)]
+   |                                                            ^^^^^^^^^^^

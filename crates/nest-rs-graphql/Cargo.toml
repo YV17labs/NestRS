@@ -10,6 +10,11 @@ description = "GraphQL resolver discovery + schema composition for NestRS apps, 
 keywords = ["framework", "nestrs", "graphql", "async-graphql", "web"]
 categories = ["web-programming", "asynchronous"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -80,6 +85,12 @@ figment = { workspace = true, features = ["test"] }
 # The thread's CPU clock, which std lacks: a cost a test compares is read on
 # it, since a thread waiting for a core accrues none.
 libc.workspace = true
+# `#[resilient]` on an operation of each role, which stays on the developer's
+# method as every attribute `#[operations]` does not consume does.
+nest-rs-resilience = { path = "../nest-rs-resilience" }
+# The spans a field's guard and pipe run in, read off the registry
+# `LogCapture` installs.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

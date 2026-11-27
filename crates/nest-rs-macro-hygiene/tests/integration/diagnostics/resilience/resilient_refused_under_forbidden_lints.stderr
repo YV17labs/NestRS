@@ -1,0 +1,47 @@
+error: #[resilient] `cancel` needs a value — write `cancel = token`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:40:26
+   |
+40 |     #[resilient(carrier, cancel)]
+   |                          ^^^^^^
+
+error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:49:35
+   |
+49 |     #[resilient(carrier, cancel = token)]
+   |                                   ^^^^^
+
+error: #[resilient] runs the method's body as attempts of its policy, and `#[tracing::instrument]` written above it has already wrapped that body in a future of its own, answering the method's type where an attempt answers `Result<T, E>` — write `#[resilient]` above `#[tracing::instrument]`, whose span then covers the whole run; for a span per attempt, instrument a method the body calls
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:56:13
+   |
+56 |         let __tracing_attr_span = slug.len();
+   |             ^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] `retries` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retries`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:64:65
+   |
+64 |     #[resilient(carrier, record_if = |_error| !zone.is_empty(), retries = 3)]
+   |                                                                 ^^^^^^^
+
+error: unknown #[resilient] argument `timout`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:69:44
+   |
+69 |     #[resilient(carrier, fallback = stale, timout = "2s")]
+   |                                            ^^^^^^
+
+error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it. A free function has no host to hold a policy in a field: the method making the call is decorated, a provider's or that of a struct built by hand
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:75:30
+   |
+75 |     async fn read_by_no_host(parcel: String) -> Answer<usize> {
+   |                              ^^^^^^^^^^^^^^
+
+error: #[resilient] decorates an `async fn`: the policy's run is awaited, and this method is a `fn` — write `async fn`. Under `#[async_trait]`, which turns each `async fn` of the impl into a `fn` returning a boxed future before this attribute reads it, write the trait's method as a native `async fn` instead
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:89:5
+   |
+89 |     fn read_by_a_fn(&self, parcel: String) -> Answer<usize> {
+   |     ^^
+
+error: #[resilient] `cancel` needs a value — write `cancel = token`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:93:26
+   |
+93 |     #[resilient(carrier, cancel)]
+   |                          ^^^^^^

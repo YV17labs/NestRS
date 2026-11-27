@@ -1,0 +1,28 @@
+error[E0308]: mismatched types
+  --> tests/integration/diagnostics/resilience/resilient_fallback_takes_other_arguments.rs:38:26
+   |
+38 |     #[resilient(carrier, fallback = by_reference)]
+   |                          ^^^^^^^^   ------------ arguments to this method are incorrect
+   |                          |
+   |                          expected `&str`, found `String`
+   |
+note: method defined here
+  --> tests/integration/diagnostics/resilience/resilient_fallback_takes_other_arguments.rs:30:14
+   |
+30 |     async fn by_reference(&self, order: &str, _error: ResilienceError<CarrierDown>) -> Answer<usize> {
+   |              ^^^^^^^^^^^^        -----------
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this method takes 1 argument but 2 arguments were supplied
+  --> tests/integration/diagnostics/resilience/resilient_fallback_takes_other_arguments.rs:43:37
+   |
+43 |     #[resilient(carrier, fallback = the_error_alone)]
+   |                          --------   ^^^^^^^^^^^^^^^
+   |                          |
+   |                          unexpected argument #1 of type `std::string::String`
+   |
+note: method defined here
+  --> tests/integration/diagnostics/resilience/resilient_fallback_takes_other_arguments.rs:34:14
+   |
+34 |     async fn the_error_alone(&self, _error: ResilienceError<CarrierDown>) -> Answer<usize> {
+   |              ^^^^^^^^^^^^^^^

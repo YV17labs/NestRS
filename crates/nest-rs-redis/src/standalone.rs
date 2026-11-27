@@ -446,8 +446,8 @@ mod tests {
             Some("redis.internal:6380")
         );
         assert_eq!(
-            reported[0].field("instance").as_deref(),
-            Some(""),
+            reported[0].field("instance"),
+            None,
             "the default instance names none"
         );
         assert!(

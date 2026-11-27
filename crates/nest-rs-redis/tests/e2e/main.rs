@@ -1070,6 +1070,8 @@ struct Replica {
     producer: Jobs,
     /// The connection the app shares between its callers, its pushes among them.
     shared: RedisConnection,
+    /// The app's container, for a test reading or switching a provider of it.
+    container: nest_rs_core::Container,
 }
 
 /// Boot the worker app `M` and start its worker — one replica, leasing for
@@ -1130,11 +1132,13 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
             .get::<RedisConnection>()
             .expect("RedisModule opens the app's connection"),
     );
+    let container = app.container().clone();
     Box::leak(Box::new(app));
     Replica {
         worker,
         producer,
         shared,
+        container,
     }
 }
 

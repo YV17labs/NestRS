@@ -155,12 +155,37 @@ with a trybuild snapshot per decorator:
   method compiled out is compiled out of its wrapper, its registration and its
   inventory entry.
 
+**A method decorator outside a pair** (`#[resilient]`) takes the members'
+receiver rule, `self: &Arc<Self>` lent as a provider's, and their reading by
+type; it dispatches nothing, so a generic method is its own. It goes on a
+handler of every impl half but a socket's connection hook, which answers `()`. A
+method it refuses is its refusals, `compile_error!` standing in its body's place,
+so nothing the body would make rustc say joins them.
+**An impl half removes from a method what it consumes — its role, its posture,
+its layers, `#[meta]` and the attribute its edge reads (`#[api]` at `#[routes]`,
+async-graphql's `#[graphql(…)]` at `#[operations]`) — and leaves every other
+attribute on the developer's method, as written and in order**: a decorator, an
+instrument reading the method's own `self` or an app's own attribute applies
+there under any name and any `#[cfg_attr]`, as on a route's handler, since no
+impl half reads an attribute it leaves by its name or under a feature. The field
+`#[operations]` generates carries only what describes it to async-graphql, on the
+method as on each parameter: `#[graphql(…)]`, the docs, each `#[cfg]` — one
+inside a `#[cfg_attr]` unfolded — and each `#[allow]`, an `#[expect]` as an
+`#[allow]` of the same lints so the expectation is checked on the method alone.
+A `#[graphql(…)]` inside a `#[cfg_attr]`, which no macro would read, and Rust's
+`#[deprecated]`, whose one caller is the field, are refused there, as `#[routes]`
+refuses the latter on a handler. Held by `nest-rs-graphql`'s resolver suite and
+the hygiene snapshots.
+
 **What a method answers is read by its type, never by its spelling.** A
 decorator resolves no name, so a renamed `Result` or a type alias must behave
 as the literal does. Behaviour is decided through a type probe —
 `nest_rs_core::__private::Answer` at `#[routes]` and `#[operations]`,
 `nest_rs_mcp::__private::OperationAnswer` at `#[tools]`,
-`nest_rs_ws::__private::ReplyValue` at `#[messages]`, `nest_rs_events::__private::ListenerAnswer` at `#[listeners]`.
+`nest_rs_ws::__private::ReplyValue` at `#[messages]`, `nest_rs_events::__private::ListenerAnswer` at `#[listeners]`,
+`nest_rs_queue::__private::ProcessAnswer` at `#[processor]`,
+`nest_rs_schedule::__private::TickAnswer` at `#[scheduled]`,
+`nest_rs_resilience::__private::ResilientAnswer` at `#[resilient]`.
 What a parameter resolves is read the same way: an extractor that resolves a
 provider implements `nest_rs_core::ResolvesProvider`, and the impl half asks
 `nest_rs_core::__private::ParamProbe` per parameter type — called on
@@ -312,5 +337,6 @@ It ships with rustdoc whose example, on its surface crate's re-export, runs
 and proves what the expansion provides, a test in the home crate's suite
 (or `nest-rs-testing` for cross-crate wiring), a use site in `demo/`, and its
 `nest-rs-macro-hygiene` witness; `#[listeners]` has no use site in `demo/`, for
-the reason `edges.md` argues. **Compile cost above 0.5 s per use site is a
-defect — measure it.**
+the reason `edges.md` argues, and `#[resilient]` none, since the demo calls no
+dependency it does not control and none is invented for a decorator. **Compile
+cost above 0.5 s per use site is a defect — measure it.**

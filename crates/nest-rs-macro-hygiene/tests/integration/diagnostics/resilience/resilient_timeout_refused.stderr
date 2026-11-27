@@ -1,0 +1,11 @@
+error: #[resilient] `timeout` takes a duration literal: a whole number above zero with an `ms`, `s`, `m` or `h` suffix, at most `u64::MAX` milliseconds (e.g. "500ms", "30s", "5m", "1h")
+  --> tests/integration/diagnostics/resilience/resilient_timeout_refused.rs:29:36
+   |
+29 |     #[resilient(carrier, timeout = 2000)]
+   |                                    ^^^^
+
+error: #[resilient] `timeout`: must be at most 600000 milliseconds — one attempt past ten minutes outlasts a worker job's default deadline, the longest the framework gives a unit; a call that long is a job's work, started and then polled, rather than one attempt
+  --> tests/integration/diagnostics/resilience/resilient_timeout_refused.rs:34:36
+   |
+34 |     #[resilient(carrier, timeout = "11m")]
+   |                                    ^^^^^

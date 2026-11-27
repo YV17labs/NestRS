@@ -12,7 +12,7 @@ _default:
 fmt:
     cargo fmt --all
 
-# Formatting, the workflows' hardening, clippy, each capability alone, the dependency policy, and the licence every published crate carries
+# Formatting, the workflows' hardening, clippy (nest-rs-resilience's in release too, which compiles what its debug build leaves out), each capability alone, every crate's targets without its default features, the dependency policy, and the licence every published crate carries
 lint:
     cargo fmt --all --check
     cargo deny check bans licenses sources
@@ -20,7 +20,9 @@ lint:
     actionlint
     zizmor --offline --quiet .github
     cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
+    cargo clippy -p nest-rs-resilience --release --all-targets --all-features -- -D warnings
     cargo hack check -p nest-rs -p nest-rs-macro-hygiene --each-feature --exclude-all-features --keep-going "{{deny_warnings}}"
+    cargo hack check --workspace --no-default-features --all-targets --keep-going "{{deny_warnings}}"
     cargo check -p nest-rs-macro-hygiene --no-default-features --features queue,testing "{{deny_warnings}}"
     cargo check -p nest-rs-macro-hygiene --no-default-features --features authn,testing "{{deny_warnings}}"
 

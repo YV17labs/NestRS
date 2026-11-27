@@ -33,7 +33,7 @@ use nest_rs_database::UnitOfWork;
 /// trying again.
 const SESSION_RETRY_AFTER_SECS: u32 = 5;
 
-// rmcp 3.11 quotes what a client sent at every level, `error` included: the
+// rmcp 3.12 quotes what a client sent at every level, `error` included: the
 // session id a client named, when the session store fails to load it. The
 // mount's sessions and store say its failure lines instead (`sessions.rs`).
 nest_rs_core::inventory::submit! {
@@ -381,11 +381,11 @@ fn host_refused() {
 /// `-32601` carrying none takes the `NOT_FOUND` class — and says its code's
 /// words; any other body is the status's problem document.
 /// A refusal in one of rmcp's sentences quoting nothing the request carried
-/// keeps it: the message, or the problem's `detail`. The one status changed
-/// is rmcp's `415` for a body typed JSON it could not read as a message: the
-/// media type is right and the body is not, so it is input the server cannot
-/// accept, answered `400` with a JSON-RPC error no id could be read for (MCP's
-/// Streamable HTTP transport, *Sending Messages*).
+/// keeps it: the message, or the problem's `detail`. rmcp's `400` for a body
+/// typed JSON it could not read as a message is input the server cannot
+/// accept (MCP's Streamable HTTP transport, *Sending Messages*), answered
+/// with a JSON-RPC error carrying no id, the one JSON-RPC 2.0 §5 has for an
+/// id it could not detect.
 async fn said_by_kind(response: Response) -> Response {
     if response.status().is_success() {
         return response;
@@ -401,8 +401,8 @@ async fn said_by_kind(response: Response) -> Response {
     });
     head.headers.remove(header::CONTENT_LENGTH);
     let text = std::str::from_utf8(&refusal).ok();
-    if head.status == StatusCode::UNSUPPORTED_MEDIA_TYPE
-        && let Some(refused) = text.and_then(unread_message)
+    if head.status == StatusCode::BAD_REQUEST
+        && let Some(refused) = unread_message(&refusal)
     {
         return unread(refused);
     }

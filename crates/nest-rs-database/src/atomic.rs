@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::error::AtomicError;
-use crate::executor::{Executor, current_executor, with_executor};
+use crate::executor::{Executor, atomic_block, with_executor};
 
 /// Run `work` atomically: inside a savepoint of the ambient transaction, or in
 /// a transaction of its own when the ambient executor holds none. `Ok` keeps
@@ -41,9 +41,8 @@ use crate::executor::{Executor, current_executor, with_executor};
 ///
 /// The block reads the ambient executor where it is first polled, runs `work`
 /// with the block installed in its place under the same scope, and leaves the
-/// ability untouched. Outside any unit of work, or on a driver that offers no
-/// atomic block, it answers [`AtomicError::Unsupported`] without polling
-/// `work`.
+/// ability untouched. Outside any unit of work it answers
+/// [`AtomicError::Unsupported`] without polling `work`.
 ///
 /// A unit of work the framework opened waits for an open block: its own
 /// statements queue until the block settles, since a statement issued beside
@@ -53,11 +52,15 @@ use crate::executor::{Executor, current_executor, with_executor};
 /// its whole length.
 ///
 /// A block dropped before it settles — cancelled by a timeout or a `select!` —
-/// rolls back; inside a unit of work it leaves that unit unable to commit, so
-/// nothing the unit wrote stands. A block of its own on a pool unit dropped
-/// while it commits leaves the `COMMIT` to finish on its driver's task, and a
-/// unit whose body failed without seeing its answer is in doubt
-/// ([`Unhonoured::IN_DOUBT`](crate::Unhonoured::IN_DOUBT)).
+/// rolls back. Once its savepoint was answered, which its first statement
+/// sends, what it sits in keeps nothing either: a unit of work it sits in
+/// directly can no longer commit, so nothing that unit wrote stands; a block
+/// it is nested in can only roll back — an `Ok` kept over it answers
+/// [`AtomicError::Poisoned`] — and the unit around that block commits what it
+/// wrote beside it. Dropped sooner, it leaves what it sits in as it was. A block
+/// of its own on a pool unit dropped while it commits leaves the `COMMIT` to
+/// finish on its driver's task, and a unit whose body failed without seeing its
+/// answer is in doubt ([`Unhonoured::IN_DOUBT`](crate::Unhonoured::IN_DOUBT)).
 pub fn atomic<'a, T, E, F>(work: F) -> impl Future<Output = Result<T, E>> + Send + 'a
 where
     F: Future<Output = Result<T, E>> + Send + 'a,
@@ -72,9 +75,12 @@ where
 /// The executor installed for an atomic block's duration, settled once by
 /// [`atomic`](fn@atomic).
 ///
-/// A driver returns one from [`Executor::atomic`]: its statements run inside
-/// the block, and the work [`after_commit`](crate::after_commit) hands it is
-/// held until the block settles.
+/// A driver returns one from [`HeldPool::transaction`](crate::HeldPool::transaction)
+/// and from [`HeldTransaction::savepoint`](crate::HeldTransaction::savepoint):
+/// its statements run inside the block, which
+/// [holds](Executor::holds) that transaction, and the work
+/// [`after_commit`](crate::after_commit) hands it is held until the block
+/// settles.
 pub trait AtomicBlock: Executor {
     /// Keep the block's writes and hand its held after-commit work to the
     /// enclosing unit when `ok`, or roll them back and drop that work. Called
@@ -127,8 +133,7 @@ where
         loop {
             match std::mem::replace(this, Atomic::Done) {
                 Atomic::Unopened(work) => {
-                    let Some(block) = current_executor().and_then(|executor| executor.atomic())
-                    else {
+                    let Some(block) = atomic_block() else {
                         return Poll::Ready(Err(AtomicError::Unsupported.into()));
                     };
                     let installed: Arc<dyn Executor> = block.clone();
@@ -180,8 +185,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-    use crate::executor::{with_job_executor, with_request_executor};
-    use crate::{ExecutorScope, current_executor_scope};
+    use crate::executor::{current_executor, with_job_executor, with_request_executor};
+    use crate::{
+        Deferred, ExecutorScope, HeldPool, HeldTransaction, Holds, Outbox, OutboxKept,
+        current_executor_scope,
+    };
 
     #[derive(Debug)]
     enum Failure {
@@ -192,15 +200,6 @@ mod tests {
     impl From<AtomicError> for Failure {
         fn from(err: AtomicError) -> Self {
             Self::Atomic(err)
-        }
-    }
-
-    /// An executor whose driver offers no atomic block.
-    struct Bare;
-
-    impl Executor for Bare {
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 
@@ -217,7 +216,7 @@ mod tests {
         }
     }
 
-    /// A unit whose driver opens a block answering `answer` when settled.
+    /// A unit in a transaction, whose savepoint answers `answer` when settled.
     struct Unit {
         settlements: Arc<Settlements>,
         answer: fn() -> Result<(), AtomicError>,
@@ -235,27 +234,86 @@ mod tests {
     }
 
     impl Executor for Unit {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> Holds<'_> {
+            Holds::Transaction(self)
+        }
+    }
+
+    impl HeldTransaction for Unit {
+        fn after_commit(&self, _work: Deferred) {
+            unreachable!("no test holds work on this unit")
         }
 
-        fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-            Some(Arc::new(Block {
+        fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+            Arc::new(Block {
+                opened_as: "savepoint",
                 settlements: Arc::clone(&self.settlements),
                 answer: self.answer,
-            }))
+            })
+        }
+
+        fn outbox(&self) -> Option<&dyn Outbox> {
+            None
+        }
+    }
+
+    /// The same unit on the pool, whose block is a transaction of its own.
+    struct PoolUnit(Arc<Unit>);
+
+    impl Executor for PoolUnit {
+        fn holds(&self) -> Holds<'_> {
+            Holds::Pool(self)
+        }
+    }
+
+    impl HeldPool for PoolUnit {
+        fn transaction(&self) -> Arc<dyn AtomicBlock> {
+            Arc::new(Block {
+                opened_as: "transaction",
+                settlements: Arc::clone(&self.0.settlements),
+                answer: self.0.answer,
+            })
+        }
+
+        fn outbox(&self) -> Option<&dyn OutboxKept> {
+            None
         }
     }
 
     struct Block {
+        /// Which of its driver's two blocks this is.
+        opened_as: &'static str,
         settlements: Arc<Settlements>,
         answer: fn() -> Result<(), AtomicError>,
     }
 
     impl Executor for Block {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> Holds<'_> {
+            Holds::Transaction(self)
         }
+    }
+
+    impl HeldTransaction for Block {
+        fn after_commit(&self, _work: Deferred) {
+            unreachable!("no test holds work on this block")
+        }
+
+        fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+            unreachable!("no test nests a block in this one")
+        }
+
+        fn outbox(&self) -> Option<&dyn Outbox> {
+            None
+        }
+    }
+
+    /// The block the ambient executor is, as its driver opened it.
+    fn on_block() -> Option<&'static str> {
+        let ambient = current_executor()?;
+        ambient
+            .holds()
+            .downcast_ref::<Block>()
+            .map(|block| block.opened_as)
     }
 
     impl AtomicBlock for Block {
@@ -298,22 +356,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_driver_offering_no_block_never_runs_the_work() {
-        let ran = AtomicBool::new(false);
-        let outcome = with_request_executor(
-            Arc::new(Bare),
-            atomic(async {
-                ran.store(true, Ordering::SeqCst);
-                Ok::<_, Failure>(())
-            }),
-        )
-        .await;
+    async fn the_block_is_a_savepoint_in_a_transaction_and_a_transaction_of_its_own_on_the_pool() {
+        let (unit, _) = Unit::new(settles);
+        let in_transaction =
+            with_request_executor(unit.clone(), atomic(async { Ok::<_, Failure>(on_block()) }));
+        assert!(
+            matches!(in_transaction.await, Ok(Some("savepoint"))),
+            "a handle holding a transaction opens a savepoint of it"
+        );
 
-        assert!(matches!(
-            outcome,
-            Err(Failure::Atomic(AtomicError::Unsupported))
-        ));
-        assert!(!ran.load(Ordering::SeqCst), "the work is never polled");
+        let on_pool = with_request_executor(
+            Arc::new(PoolUnit(unit)),
+            atomic(async { Ok::<_, Failure>(on_block()) }),
+        );
+        assert!(
+            matches!(on_pool.await, Ok(Some("transaction"))),
+            "a handle holding the pool opens a transaction of its own"
+        );
     }
 
     #[tokio::test]
@@ -332,10 +391,7 @@ mod tests {
         let (unit, _) = Unit::new(settles);
         let seen = with_job_executor(
             unit,
-            atomic(async {
-                let on_block = current_executor().is_some_and(|e| e.as_any().is::<Block>());
-                Ok::<_, Failure>((on_block, current_executor_scope()))
-            }),
+            atomic(async { Ok::<_, Failure>((on_block().is_some(), current_executor_scope())) }),
         )
         .await;
 
@@ -351,7 +407,7 @@ mod tests {
         with_request_executor(unit, async {
             let settled = atomic(async { Ok::<_, Failure>(()) }).await;
             assert!(settled.is_ok(), "{settled:?}");
-            assert!(current_executor().is_some_and(|e| e.as_any().is::<Unit>()));
+            assert!(current_executor().is_some_and(|e| e.holds().downcast_ref::<Unit>().is_some()));
         })
         .await;
     }

@@ -77,8 +77,8 @@ impl ScheduleView {
         self.replicas
     }
 
-    /// Settle the tick without running the rest of it. A tick has no retry:
-    /// the next occurrence runs as scheduled.
+    /// Settle the tick without running the rest of it. The scheduler gives a
+    /// tick no retry: the next occurrence runs as scheduled.
     ///
     /// From an exception filter, it answers a failed tick: the failure is said
     /// at `warn` rather than `error`, and its unit of work still rolls back.

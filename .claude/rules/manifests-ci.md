@@ -117,11 +117,15 @@ owning crate's suite is undocumented.
   (mold) is inherited by `demo/`, never duplicated.
 - `rust-toolchain.toml` pins the channel as `major.minor`; each workspace's
   `rust-version`, the images, `nestrs doctor`, the docs and every scaffold move
-  with it in one change. The pin also keeps the trybuild snapshots still.
+  with it in one change, and each entry of `.claude/upstream/rustc.md` is
+  checked again as its *Canary* says. The pin also keeps the trybuild snapshots
+  still.
 - `--workspace` builds one feature union, so a crate that compiles only
   because a sibling enabled a feature passes it. `just lint` builds the umbrella
   and `nest-rs-macro-hygiene` under each feature alone (`cargo hack`): the
-  install contract is `cargo add nest-rs --features <x>`, not a sub-crate.
+  install contract is `cargo add nest-rs --features <x>`, not a sub-crate. It
+  also checks every crate's targets, its suites included, without its default
+  features, so a suite reading a default feature's items gates them on it.
 
 ## CI
 
@@ -178,9 +182,11 @@ its reason.
 
 ## Semver
 
-A 7.x release never breaks what a program or an operator matches
-(`decisions/semver-7x.md`); `docs/src/content/docs/semver.mdx` says it to
-readers, and the two move in one change.
+A release that breaks what a program or an operator matches is a major
+(`decisions/semver.md`); `docs/src/content/docs/semver.mdx` says it to
+readers, and the two move in one change. The list decides a release's number,
+never a design: a break worth making is made when it is found (`CLAUDE.md`,
+*How we work*), and the next release is the major holding it.
 
 - **API**: every tier-1 item of a published crate — reachable through no
   `__private`, `__`-prefixed or `#[doc(hidden)]` item — but `nest-rs-cli`'s
@@ -214,15 +220,15 @@ readers, and the two move in one change.
   2, and never raises the MSRV.
 - **A minor may deprecate a spelling its own addition replaces**: the old one
   keeps compiling and warns through rustc's `deprecated` lint, naming what to
-  write, under the changelog's `### Deprecated`, until 8.0 refuses it.
+  write, under the changelog's `### Deprecated`, until a major refuses it.
 - **A security fix refusing an insecure configuration that used to boot is a
-  patch** (`decisions/semver-7x.md`, 2026-10-12): it ships under the
+  patch** (`decisions/semver.md`, 2026-10-12): it ships under the
   changelog's `### Security`, with an upgrading line naming the refused
   configuration and the secure one. Insecure by a standard (an RFC, OWASP),
-  never merely unusual; every other break waits for 8.0.
+  never merely unusual; every other break makes its release a major.
 - **Tier 2 is outside semver**, safe only under the `=` pins: no third party
   names it, even through `::nest_rs::<concern>::__private`.
-- **A package depends on `nest-rs = { version = "7.N", default-features =
+- **A package depends on `nest-rs = { version = "<major>.<minor>", default-features =
   false, features = [...] }`**, its tests on `nest-rs` with `testing`; a
   `proc-macro` crate uses `nest-rs-codegen`'s root items alone and emits no
   `__private` path.
@@ -257,7 +263,9 @@ held by review: docs.rs builds the default features alone, and its page shows
 what `just doc` checks (`decisions/docs-rs-renders-every-feature.md`). The changelog
 follows Keep a Changelog, one file per minor line — `changelog/<major>.<minor>.md`
 holds that line's releases and patches — and `CHANGELOG.md` is their index, newest
-first. A new line opens its file under `[Unreleased]` and its index row; a breaking
-change carries its upgrading entry. A released entry is the record of what shipped
+first. What is not yet released lives in `changelog/unreleased.md`, its index row
+`Unreleased`, and no file, page, decision or rustdoc names the number it will
+carry: cutting the release numbers it and renames the file; a breaking change
+carries its upgrading entry. A released entry is the record of what shipped
 and is never rewritten to a later rule; `[Unreleased]` is prose like any other,
 `<PREFIX>_` included.

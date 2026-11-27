@@ -1,0 +1,21 @@
+error: future cannot be sent between threads safely
+  --> tests/integration/diagnostics/resilience/resilient_record_if_shares_an_argument.rs:58:14
+   |
+58 |         sent(parcels.ship(Cell::new(1)));
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^ future returned by `ship` is not `Send`
+   |
+   = help: the trait `Sync` is not implemented for `Cell<u32>`
+   = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU32` instead
+note: future is not `Send` as it awaits another future which is not `Send`
+  --> tests/integration/diagnostics/resilience/resilient_record_if_shares_an_argument.rs:34:47
+   |
+33 |     #[resilient(carrier, record_if = |_error| tally.get() > 0)]
+   |     ----------------------------------------------------------- in this attribute macro expansion
+34 |     async fn ship(&self, tally: Cell<u32>) -> Result<u32, ResilienceError<CarrierDown>> {
+   |                                               ^^^^^^ await occurs here on type `impl std::future::Future<Output = Result<u32, ResilienceError<CarrierDown>>>`, which is not `Send`
+note: required by a bound in `sent`
+  --> tests/integration/diagnostics/resilience/resilient_record_if_shares_an_argument.rs:53:21
+   |
+53 | fn sent<F: Future + Send>(_: F) {}
+   |                     ^^^^ required by this bound in `sent`
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

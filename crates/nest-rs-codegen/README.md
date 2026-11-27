@@ -12,7 +12,7 @@ Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same
 cargo add nest-rs-codegen
 ```
 
-Depend on `nest-rs-codegen = "7.N"` from a `proc-macro` crate only; an app or
+Depend on `nest-rs-codegen = "<major>.<minor>"` from a `proc-macro` crate only; an app or
 a library names the umbrella, `nest-rs`, and nothing else. What a decorator
 crate emits names documented items alone, rooted through `reroot`
 ([Writing a package](https://nestrs.dev/semver/#writing-a-package)).

@@ -124,10 +124,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             &method.sig,
             quote!(<#self_ty>::#method_ident(&__provider, __event)),
         );
-        // What the method answers is read by its type, refused at its return type.
-        let answered = quote_spanned! {answer_span(&method.sig)=>
-            ::nest_rs_events::__private::answered(__nestrs_answer)
-        };
+        // The answer is read by its type, refused at its return type and bound there:
+        // bound at the call site, it does not resolve where `tt` fragments wrote that type.
+        let at = answer_span(&method.sig);
+        let answer = quote_spanned!(at=> __nestrs_answer);
+        let answered = quote_spanned!(at=> ::nest_rs_events::__private::answered(#answer));
 
         emissions.push(quote! {
             #(#cfgs)*
@@ -154,7 +155,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     move |__event| {
                         let __provider = ::std::sync::Arc::clone(&__provider);
                         async move {
-                            let __nestrs_answer = #call;
+                            let #answer = #call;
                             #answered
                         }
                     },

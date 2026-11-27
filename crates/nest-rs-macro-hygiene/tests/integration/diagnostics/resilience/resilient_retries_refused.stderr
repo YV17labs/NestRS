@@ -1,0 +1,23 @@
+error: #[resilient] `retries` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retries`
+  --> tests/integration/diagnostics/resilience/resilient_retries_refused.rs:30:26
+   |
+30 |     #[resilient(carrier, retries = 3)]
+   |                          ^^^^^^^
+
+error: #[resilient] `retries`: `0` turns retries off, which leaves `idempotent` sending the call no second time — drop `idempotent` and `retries`, and the body runs once
+  --> tests/integration/diagnostics/resilience/resilient_retries_refused.rs:35:48
+   |
+35 |     #[resilient(carrier, idempotent, retries = 0)]
+   |                                                ^
+
+error: #[resilient] `retries`: must be at most 10 — past ten, the retries let one call send its failing dependency twelve attempts or more, the hammering a breaker exists to stop
+  --> tests/integration/diagnostics/resilience/resilient_retries_refused.rs:40:48
+   |
+40 |     #[resilient(carrier, idempotent, retries = 11)]
+   |                                                ^^
+
+error: #[resilient] `retries` takes a whole number, e.g. `retries = 3`
+  --> tests/integration/diagnostics/resilience/resilient_retries_refused.rs:45:48
+   |
+45 |     #[resilient(carrier, idempotent, retries = "3")]
+   |                                                ^^^

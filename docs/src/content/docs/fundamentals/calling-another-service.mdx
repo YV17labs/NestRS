@@ -29,7 +29,7 @@ cargo add reqwest@0.13 reqwest-middleware@0.5
 
 The second line is there because the client is yours: your code builds it and
 calls it in reqwest's own words, so it names both crates, at the versions
-NestRS holds for the whole of 7.x ([semver policy](/semver/#third-party-libraries)).
+NestRS holds for the whole of a major ([semver policy](/semver/#third-party-libraries)).
 
 ## What a request carries
 
@@ -74,11 +74,13 @@ gets out of the way.
 
 ## Going further
 
-- [Resilience](/fundamentals/resilience/) — a timeout per attempt, retries
-  and a circuit breaker on the same client.
+- [Resilience middleware](/fundamentals/resilience-middleware/) — a timeout per
+  attempt, retries, a circuit breaker, a bulkhead and a rate limit on the same
+  client.
+- [Failures and fallbacks](/fundamentals/failures-and-fallbacks/) — which
+  answers count, and what answers in place of an error, on a decorated method.
 - [Correlation](/fundamentals/correlation/) — the trace every unit of work
   runs under, and where it travels.
-- [Traces](/opentelemetry/traces/) — the client spans of statements, commands
-  and requests.
-- [Metrics](/opentelemetry/metrics/) — the durations, and the ones every unit
+- [Traces](/opentelemetry/traces/) and [Metrics](/opentelemetry/metrics/) — the
+  client spans of statements, commands and requests, and the durations every unit
   records on its own.

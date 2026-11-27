@@ -224,7 +224,16 @@ impl TestGateway {
         Err(LocalFailure::new())
     }
 
-    // A body the handler decodes itself, failing in each tier's shape.
+    // An answer the handler decodes itself, failing in each tier's shape.
+    #[subscribe_message("decode_by_hand")]
+    #[public]
+    async fn decode_by_hand_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        let amount: u64 = serde_json::from_str(SECRET_BODY).map_err(|failure| {
+            nest_rs_core::Problem::from(nest_rs_core::DecodeError::from(failure))
+        })?;
+        Ok(amount.to_string())
+    }
+
     #[subscribe_message("decode_anyhow")]
     #[public]
     async fn decode_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
@@ -250,6 +259,14 @@ impl TestGateway {
         serde_json::from_str::<u64>(SECRET_BODY)
             .map(|amount| amount.to_string())
             .map_err(DecodeDisplayOnly)
+    }
+
+    #[subscribe_message("decode_shared")]
+    #[public]
+    async fn decode_shared_handler(&self) -> Result<String, DecodeShared> {
+        serde_json::from_str::<u64>(SECRET_BODY)
+            .map(|amount| amount.to_string())
+            .map_err(|unread| DecodeShared(std::sync::Arc::new(unread)))
     }
 
     /// The edge's own deliberate error.
@@ -305,7 +322,7 @@ impl nest_rs_core::ToProblem for Taken {
     }
 }
 
-/// What every `decode_*` handler decodes: a number, sent a secret.
+/// What every `decode_*` handler decodes: a number, answered a secret.
 const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
 
 /// A `Display`-only error spelling a decode failure — the third tier, which has
@@ -318,6 +335,12 @@ impl std::fmt::Display for DecodeDisplayOnly {
         write!(f, "could not read the amount: {}", self.0)
     }
 }
+
+/// A decode failure as a feature sharing it keeps it: serde_json's error is no
+/// `Clone`, so behind an `Arc`.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("the amount could not be read")]
+struct DecodeShared(#[source] std::sync::Arc<serde_json::Error>);
 
 /// An error holding an `Rc` — neither `Send` nor `Sync` — whose sentence names
 /// no cause, so only a walk of its chain reaches the one beneath it.
@@ -1431,8 +1454,18 @@ impl RecordingUnit {
 struct NoExecutor;
 
 impl nest_rs_database::Executor for NoExecutor {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for NoExecutor {
+    fn transaction(&self) -> std::sync::Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 
@@ -1904,24 +1937,177 @@ async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
     );
 }
 
-/// Every tier a handler's error takes: `anyhow::Result` with `?`, serde's error
-/// itself, an error that is not `Send`, and a `Display`-only one.
+static FRAGMENT_HOOKS_RAN: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+#[gateway(path = "/fragment-hooks")]
+pub(crate) struct FragmentHookGateway;
+
+// The hooks come through `tt` fragments, keeping the caller's spans, and
+// `#[messages]` the macro's: what the expansion binds resolves in the hooks'.
+macro_rules! declare_fragment_hooks {
+    ($($hooks:tt)*) => {
+        #[messages]
+        impl FragmentHookGateway {
+            $($hooks)*
+        }
+    };
+}
+
+declare_fragment_hooks! {
+    #[on_connect]
+    async fn connected(&self, client: &WsClient) {
+        let _ = client;
+        FRAGMENT_HOOKS_RAN.lock().expect("unpoisoned").push("connected");
+    }
+
+    #[on_disconnect]
+    fn disconnected(&self) {
+        FRAGMENT_HOOKS_RAN.lock().expect("unpoisoned").push("disconnected");
+    }
+}
+
+#[tokio::test]
+async fn a_hook_a_macro_fragment_writes_runs_as_the_one_written_out() {
+    let client = WsClient::for_test();
+    FragmentHookGateway.on_connect(&client).await;
+    FragmentHookGateway.on_disconnect(&client).await;
+    assert_eq!(
+        *FRAGMENT_HOOKS_RAN.lock().expect("unpoisoned"),
+        ["connected", "disconnected"],
+        "each hook ran, the one taking the client and the one leaving it out",
+    );
+}
+
+// A hook may borrow its gateway through the lifetime its receiver names, written
+// out and through `tt` fragments.
+
+static BORROWING_HOOKS_RAN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The lobby a gateway's hooks greet a client in, which they read borrowed.
+#[derive(Default)]
+struct Lobby(String);
+
+#[gateway(path = "/borrowing-hooks")]
+#[derive(Default)]
+pub(crate) struct BorrowingHookGateway {
+    lobby: Lobby,
+}
+
+#[messages]
+impl BorrowingHookGateway {
+    #[on_connect]
+    async fn connected<'a>(&'a self, client: &'a WsClient) {
+        let _ = client;
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} connected"));
+    }
+
+    #[on_disconnect]
+    fn disconnected<'a>(&'a self) {
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} disconnected"));
+    }
+}
+
+#[gateway(path = "/fragment-borrowing-hooks")]
+#[derive(Default)]
+pub(crate) struct FragmentBorrowingHookGateway {
+    lobby: Lobby,
+}
+
+macro_rules! declare_fragment_borrowing_hooks {
+    ($($hooks:tt)*) => {
+        #[messages]
+        impl FragmentBorrowingHookGateway {
+            $($hooks)*
+        }
+    };
+}
+
+declare_fragment_borrowing_hooks! {
+    #[on_connect]
+    async fn connected<'a>(&'a self, client: &'a WsClient) {
+        let _ = client;
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} connected"));
+    }
+
+    #[on_disconnect]
+    fn disconnected<'a>(&'a self) {
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} disconnected"));
+    }
+}
+
+#[tokio::test]
+async fn a_hook_borrowing_through_the_lifetime_its_receiver_names_runs() {
+    let client = WsClient::for_test();
+    let written = BorrowingHookGateway {
+        lobby: Lobby("the written lobby".to_owned()),
+    };
+    written.on_connect(&client).await;
+    written.on_disconnect(&client).await;
+    let fragment = FragmentBorrowingHookGateway {
+        lobby: Lobby("the fragment's lobby".to_owned()),
+    };
+    fragment.on_connect(&client).await;
+    fragment.on_disconnect(&client).await;
+    assert_eq!(
+        *BORROWING_HOOKS_RAN.lock().expect("unpoisoned"),
+        [
+            "the written lobby connected",
+            "the written lobby disconnected",
+            "the fragment's lobby connected",
+            "the fragment's lobby disconnected",
+        ],
+        "each hook ran on the gateway it borrowed, written out and through a fragment",
+    );
+}
+
+/// Every tier a handler's error takes — `anyhow::Result` with `?`, serde's
+/// error itself, an error that is not `Send`, and a `Display`-only one: a
+/// decode failure its chain holds is the server's, answered opaquely and filed
+/// once without the value; one the handler says is its client's answers the
+/// report and files nothing.
 #[tokio::test]
 async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_value() {
     const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
     let logs = nest_rs_testing::LogCapture::install();
     let invalid = nest_rs_core::code::INVALID_ARGUMENT.as_str();
     let internal = nest_rs_core::code::INTERNAL.as_str();
-    for (event, framed, class) in [
-        ("decode_anyhow", REPORT.to_owned(), invalid),
-        ("decode_serde", REPORT.to_owned(), invalid),
-        ("decode_unsendable", REPORT.to_owned(), invalid),
+    let opaque = nest_rs_core::OPAQUE_CLIENT_MESSAGE;
+    for (event, framed, class, filed) in [
+        ("decode_by_hand", REPORT, invalid, None),
+        ("decode_anyhow", opaque, internal, Some(REPORT.to_owned())),
+        ("decode_serde", opaque, internal, Some(REPORT.to_owned())),
+        (
+            "decode_unsendable",
+            opaque,
+            internal,
+            Some(REPORT.to_owned()),
+        ),
         (
             "decode_display_only",
-            nest_rs_core::OPAQUE_CLIENT_MESSAGE.to_owned(),
+            opaque,
             internal,
+            Some(format!("could not read the amount: {REPORT}")),
         ),
     ] {
+        let seen = logs
+            .find(nest_rs_ws::TARGET, "websocket message failed")
+            .len();
         let reply = TestGateway
             .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
             .await;
@@ -1931,6 +2117,12 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
         assert_eq!(frame.error, framed, "{event}");
         assert_eq!(frame.code.as_deref(), Some(class), "{event}");
         assert!(frame.errors.is_none(), "{event}: {frame:?}");
+        let lines = logs.find(nest_rs_ws::TARGET, "websocket message failed");
+        let said: Vec<_> = lines[seen..]
+            .iter()
+            .filter_map(|line| line.field("error"))
+            .collect();
+        assert_eq!(said, Vec::from_iter(filed), "{event}");
     }
     let quoting: Vec<String> = logs
         .events()
@@ -1939,6 +2131,43 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
         .map(|event| format!("{} {:?}", event.message, event.fields))
         .collect();
     assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
+}
+
+/// A decode failure a handler's error shares behind a pointer is answered as
+/// one it names bare is: opaquely, never `INVALID_ARGUMENT`, its chain filed
+/// without the value.
+#[tokio::test]
+async fn a_decode_failure_shared_behind_a_pointer_is_answered_opaquely_and_filed() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "decode_shared",
+            serde_json::Value::Null,
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(frame.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+    assert_eq!(
+        frame.code.as_deref(),
+        Some(nest_rs_core::code::INTERNAL.as_str()),
+        "{frame:?}",
+    );
+    assert!(frame.errors.is_none(), "{frame:?}");
+
+    let line = logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("event").as_deref(), Some("decode_shared"));
+    assert_eq!(
+        line.field("error").as_deref(),
+        Some(
+            "the amount could not be read: invalid type: a string, expected u64 at line 1 column \
+             24"
+        ),
+    );
+    assert!(!format!("{frame:?} {line:?}").contains("sk_live"));
 }
 
 /// The edge's own deliberate error answers as built.

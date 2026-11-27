@@ -105,7 +105,7 @@ pub struct Page<M> {
 The implementation fetches `limit + 1` rows, truncates the probe row from
 `items`, and uses its presence to set `has_more` and `next_cursor`. The
 cursor is the last visible row's primary key — present only when there is
-more to fetch. A later 7.x may add a field, so a page is read field by field
+more to fetch. A later minor may add a field, so a page is read field by field
 and built through `Page::new(items, next_cursor, has_more)`, as a service
 does when it hands on a page whose rows it mapped.
 

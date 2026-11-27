@@ -86,6 +86,12 @@ nextest prints each test's time: compare before and after.
   loopback HTTPS peer presenting a `TestAuthority` certificate, answering a
   script and keeping each request's head; a suite reaches for it before
   writing an accept loop of its own.
+- **`Upstream`** (`tls`) — the development service a TLS double stands in
+  front of: `Upstream::tls(host, port)` for one speaking TLS from its first
+  byte, `Upstream::postgres` for one asking with an `SSLRequest`, whose
+  `bridge` takes the client's handshake with the double's acceptor and dials
+  the service verified against the system's trust. A double holding back,
+  pacing or severing what it relays writes only that, never the handshakes.
 - **`TestAuthority`** (`tls` feature, on under the umbrella's `testing`) —
   the certificates a TLS double presents and a client trusts, issued in
   process. A double in front of a service ends

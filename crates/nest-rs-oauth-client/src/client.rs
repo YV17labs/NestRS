@@ -236,7 +236,8 @@ impl fmt::Display for Endpoint<'_> {
 
 /// A call to `endpoint` that got no answer, as [`AuthError::Unavailable`] (RFC 9110
 /// §15.6.4): a timeout says the bound it hit, and any other failure keeps
-/// reqwest's chain without the URL, which it quotes whole.
+/// reqwest's error, which a line says as `nest-rs-reqwest` reads it — its kind
+/// and, of a handshake, rustls's reason, never the URL it quotes whole.
 fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
     if error.is_timeout() {
         let detail = if error.is_connect() {
@@ -575,7 +576,8 @@ impl OAuthClient {
     /// refused, naming the field: `config` may be a sign-in provider's, read
     /// under none of this crate's variables, so a refusal names none of them.
     /// For the same reason a handshake a provider later refuses is said with
-    /// rustls's reason alone.
+    /// rustls's reason alone — the alert the provider sent by its name, a
+    /// certificate it presented without the names and the dates it holds.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
         Self::built(config, None)
     }

@@ -17,7 +17,7 @@
 //!    through [`reroot`], which rewrites each such root to the path the call
 //!    site resolves — `::nest_rs::<concern>::` behind the umbrella. It never
 //!    emits a hidden path: a package's macro source is written against one
-//!    7.x and runs in apps on later ones, where hidden items differ, and only
+//!    release and runs in apps on later ones of its major, where hidden items differ, and only
 //!    documented items hold across them.
 //! 2. **It emits its own package's items as `::<its_crate>::…`.**
 //!
@@ -84,6 +84,7 @@ mod provider_site;
 mod queue_name;
 mod refusals;
 mod replicas;
+mod resilient;
 mod root;
 mod route_path;
 mod row_probe;
@@ -117,7 +118,7 @@ pub mod __private {
         duplicate_argument, key_as_written, missing_argument, needs_a_value, one_role_per_method,
         require_str_lit, site, takes_value, unknown_argument, unknown_value,
     };
-    pub use crate::attrs::{Conditional, cfg_attrs, delegated_attrs};
+    pub use crate::attrs::{Conditional, cfg_attrs, field_attrs, is_written};
     pub use crate::capability::guard_capability_bounds;
     pub use crate::casing::{camel_case, singular};
     pub use crate::crud::{
@@ -144,7 +145,7 @@ pub mod __private {
     pub use crate::instance::{DEFAULT_INSTANCE, INSTANCE, RESERVED_VOCABULARY, instance_name};
     pub use crate::item::item_shape;
     pub use crate::job::{
-        JobDecorator, JobKey, TIMEOUT, TRANSACTIONAL, job_argument_needs_a_value, job_key,
+        JobDecorator, JobKey, RETRIES, TIMEOUT, TRANSACTIONAL, job_argument_needs_a_value, job_key,
         job_keys, job_returns_a_result, job_timeout, job_transaction, timeout_value,
         transactional_value, unread_job_key,
     };
@@ -166,6 +167,9 @@ pub mod __private {
     pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const};
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};
     pub use crate::replicas::{REPLICAS, Replicas, replicas_value};
+    pub use crate::resilient::{
+        RESILIENT, is_resilient, resilient_policy_setting, resilient_retries, resilient_timeout,
+    };
     pub use crate::root::{CHECKED_BY_CRUD, refused_without, reroot_as, reroot_impl_half};
     pub use crate::route_path::RoutePath;
     pub use crate::row_probe::no_row_answered;

@@ -2,7 +2,6 @@
 //! `UnitOfWork` opens — as a request granted the ability given, or as system
 //! work — and the unit settles on the body's own outcome.
 
-use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -36,8 +35,18 @@ fn seen() -> std::sync::MutexGuard<'static, Seen> {
 struct Handle;
 
 impl Executor for Handle {
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for Handle {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 

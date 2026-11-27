@@ -65,6 +65,8 @@ Four things it refuses that a `#[query]` does not, each a named compile error:
 
 The method itself may be a plain `fn` or an `async fn`: the resolver
 async-graphql awaits is the one the decorator emits, which is always `async`.
+Its answer borrows nothing of the method: the type it resolves is read outside
+the method, so `&'a Post` borrowed through `&'a self` is rustc's `E0261`.
 
 Two more are decided at **boot**, because only the built schema holds the
 fact. An `#[entity]` whose resolved type carries no `@key` — a list, a

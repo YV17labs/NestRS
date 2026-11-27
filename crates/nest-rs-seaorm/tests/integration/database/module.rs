@@ -23,11 +23,54 @@ struct SlowCommit;
 
 struct SlowCommitUnit;
 
+/// The handle a stub unit installs, reaching no database: a pool, and the
+/// block a mutation root field opens on it, which settles nothing.
 struct Nowhere;
 
 impl Executor for Nowhere {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for Nowhere {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        Arc::new(NowhereBlock)
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
+    }
+}
+
+struct NowhereBlock;
+
+impl Executor for NowhereBlock {
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for NowhereBlock {
+    fn after_commit(&self, _work: nest_rs_database::Deferred) {
+        unreachable!("no test holds work on this block")
+    }
+
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        Arc::new(Self)
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        None
+    }
+}
+
+impl nest_rs_database::AtomicBlock for NowhereBlock {
+    fn settle(
+        self: Arc<Self>,
+        _ok: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), nest_rs_database::AtomicError>> + Send>> {
+        Box::pin(std::future::ready(Ok(())))
     }
 }
 
@@ -207,13 +250,17 @@ async fn a_graphql_request_runs_on_the_pool_and_each_operation_opens_its_own_uni
         .await
         .expect("the binding boots over a seeded pool and unit of work");
 
-    for query in ["{ read }", "mutation { write }"] {
-        app.http()
+    for (query, field) in [("{ read }", "read"), ("mutation { write }", "write")] {
+        let answered = app
+            .http()
             .post("/graphql")
             .body_json(&serde_json::json!({ "query": query }))
             .send()
-            .await
-            .assert_status_is_ok();
+            .await;
+        answered.assert_status_is_ok();
+        answered
+            .assert_json(serde_json::json!({ "data": { field: true } }))
+            .await;
     }
     app.http()
         .post("/probe/quick")

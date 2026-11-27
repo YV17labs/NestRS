@@ -147,6 +147,15 @@ impl Savepoint {
     /// Take the enclosing unit's turn for as long as the block is open, and
     /// send its `SAVEPOINT` there: a refused one poisons the enclosing unit,
     /// whose transaction Postgres has just aborted.
+    ///
+    /// Dropped before the `SAVEPOINT` answered, this leaves the block unopened
+    /// and its unit as it was, since no statement of the block's ran: waiting
+    /// for the turn or a connection, nothing was sent; a `BEGIN` dropped
+    /// unanswered is rolled back by the pool before it lends the connection
+    /// again, and the unit begins another; and a `SAVEPOINT` dropped unanswered
+    /// still runs on the server, as any statement dropped mid-flight does,
+    /// where it holds nothing — the next `SAVEPOINT` of its name hides it, and
+    /// the enclosing block's release or the unit's commit ends it.
     async fn send_savepoint(&self) -> Result<(), DbErr> {
         if !self.holds_turn.load(Ordering::Acquire) {
             self.enclosing.turn().for_block().await?;
@@ -156,12 +165,10 @@ impl Savepoint {
             self.root().pool().get_database_backend(),
             format!("SAVEPOINT {}", self.name()),
         );
-        let mut unsettled = Unsettled::armed(&self.enclosing, self.transport());
         let sent = self
             .enclosing
             .run_unturned(|txn| txn.execute_raw(statement))
             .await;
-        unsettled.disarm();
         if sent.is_err() {
             self.give_back_turn();
         }
@@ -210,15 +217,8 @@ impl Savepoint {
             unsettled.disarm();
             self.give_back_turn();
             if let Err(err) = sent {
-                self.enclosing.poison_deterministic();
                 report_discarded(transport, held.len());
-                tracing::error!(
-                    target: crate::target::ORM,
-                    transport,
-                    error = %nest_rs_core::error_message(&err),
-                    outcome = "rollback_and_fail",
-                    "an atomic block's savepoint could not be settled; its unit cannot commit",
-                );
+                self.enclosing.unsettled(transport, &err);
                 return Err(AtomicError::Database(Box::new(crate::RepoError::from(err))));
             }
         }
@@ -251,15 +251,18 @@ impl Savepoint {
 }
 
 impl Drop for Savepoint {
-    /// A block dropped before it settled — its future cancelled — leaves its
-    /// savepoint open on the connection: nothing can vouch for what its unit
-    /// writes next, so that unit no longer commits.
+    /// A block dropped once it opened and before it settled — its future
+    /// cancelled — leaves its savepoint open on the connection with what it
+    /// wrote inside: nothing can vouch for what is written next around it, so
+    /// what it sits in keeps nothing — a unit of work no longer commits, and
+    /// a block it is nested in rolls back, taking the savepoint with it. One
+    /// dropped unopened ran no statement of its own, and leaves what it sits
+    /// in as it was.
     fn drop(&mut self) {
         let transport = self.transport();
         report_discarded(transport, still_held(&mut self.after_commit));
         if !self.settled.load(Ordering::Acquire) && self.opened.get().is_some() {
-            self.enclosing.poison_deterministic();
-            report_abandoned(transport);
+            self.enclosing.abandoned(transport);
         }
         self.give_back_turn();
         self.enclosing.turn().leave();
@@ -288,6 +291,57 @@ impl Enclosing {
         }
     }
 
+    /// A block sitting here was left unsettled — dropped once it opened, or
+    /// its settling dropped unanswered: poison what it sat in, and say what
+    /// that costs. A unit of work can no longer commit, a `warn`. A block can
+    /// only roll back, which undoes the abandoned one with it and leaves its
+    /// own unit free to commit: a `debug`, since whoever settles that block is
+    /// told — an `Ok` kept over it is [`AtomicError::Poisoned`] — and a policy
+    /// giving up an attempt holding a block does this on every such cut.
+    fn abandoned(&self, transport: &'static str) {
+        self.poison_deterministic();
+        match self {
+            Enclosing::Boundary(_) => tracing::warn!(
+                target: crate::target::ORM,
+                transport,
+                outcome = "abandoned",
+                "atomic block abandoned before it settled; its unit cannot commit",
+            ),
+            Enclosing::Block(_) => tracing::debug!(
+                target: crate::target::ORM,
+                transport,
+                outcome = "abandoned",
+                "atomic block abandoned before it settled; the block it is nested in can only \
+                 roll back",
+            ),
+        }
+    }
+
+    /// The database refused to settle a block sitting here, with `err`: poison
+    /// what it sat in, and say which that is, as [`abandoned`](Self::abandoned)
+    /// tells the two apart.
+    fn unsettled(&self, transport: &'static str, err: &DbErr) {
+        self.poison_deterministic();
+        let error = nest_rs_core::error_message(err);
+        match self {
+            Enclosing::Boundary(_) => tracing::error!(
+                target: crate::target::ORM,
+                transport,
+                %error,
+                outcome = "rollback_and_fail",
+                "an atomic block's savepoint could not be settled; its unit cannot commit",
+            ),
+            Enclosing::Block(_) => tracing::error!(
+                target: crate::target::ORM,
+                transport,
+                %error,
+                outcome = "rollback_and_fail",
+                "an atomic block's savepoint could not be settled; the block it is nested in \
+                 can only roll back",
+            ),
+        }
+    }
+
     /// Run a statement of the enclosing unit's while the block nested in it
     /// holds that unit's turn: its own `SAVEPOINT`.
     async fn run_unturned<'a, T, F, Fut>(&'a self, statement: F) -> Result<T, DbErr>
@@ -302,9 +356,9 @@ impl Enclosing {
     }
 }
 
-/// Poisons the enclosing unit when the future sending a block's `SAVEPOINT`,
-/// `RELEASE` or `ROLLBACK TO` is dropped before the database answered: the
-/// savepoint is then in a state nothing can vouch for.
+/// Poisons what a block sits in when the future settling it, sending its
+/// `RELEASE` or its `ROLLBACK TO`, is dropped before the database answered:
+/// what the block wrote is then kept or not, and nothing can vouch for which.
 struct Unsettled<'a> {
     enclosing: &'a Enclosing,
     transport: &'static str,
@@ -328,19 +382,9 @@ impl<'a> Unsettled<'a> {
 impl Drop for Unsettled<'_> {
     fn drop(&mut self) {
         if self.armed {
-            self.enclosing.poison_deterministic();
-            report_abandoned(self.transport);
+            self.enclosing.abandoned(self.transport);
         }
     }
-}
-
-fn report_abandoned(transport: &'static str) {
-    tracing::warn!(
-        target: crate::target::ORM,
-        transport,
-        outcome = "abandoned",
-        "atomic block abandoned before it settled; its unit cannot commit",
-    );
 }
 
 #[cfg(test)]

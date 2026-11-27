@@ -5,11 +5,11 @@ use futures_util::future::BoxFuture;
 use crate::error::OutboxError;
 
 /// One job a unit's transaction keeps until it commits: written by the queue
-/// port on the ambient executor ([`Executor::write_outbox`](crate::Executor::write_outbox)),
-/// read back by its relay through an [`OutboxStore`], and opaque to this port,
-/// which names no queue type.
+/// port into the outbox of the transaction the ambient executor holds
+/// ([`Outbox::write`]), read back by its relay through an [`OutboxStore`], and
+/// opaque to this port, which names no queue type.
 ///
-/// It can grow within 7.x: build one through [`OutboxRecord::new`].
+/// It can grow in a minor release: build one through [`OutboxRecord::new`].
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq)]
 pub struct OutboxRecord {
@@ -61,7 +61,7 @@ impl std::fmt::Debug for OutboxRecord {
 /// A record an [`OutboxClaim`] holds: its place in the store, how many times
 /// filing it failed, and how long ago its unit wrote it.
 ///
-/// It can grow within 7.x: build one through [`ClaimedRecord::new`].
+/// It can grow in a minor release: build one through [`ClaimedRecord::new`].
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimedRecord {
@@ -97,15 +97,53 @@ nest_rs_core::inventory::submit! {
     )
 }
 
+/// What an outbox keeps and no relay has filed yet, as a cancel reaches it
+/// from the ambient executor: on the pool
+/// ([`HeldPool::outbox`](crate::HeldPool::outbox)), the records committed
+/// units wrote; in a transaction, through its [`Outbox`], those and its own.
+pub trait OutboxKept: Send + Sync {
+    /// Delete the record of job `id` on `queue` that no relay has filed yet,
+    /// on the handle's own unit, answering whether there was one. A record a
+    /// relay is filing is waited for: the removal answers once that relay
+    /// settled, deleting the record it left, or finding none once the backend
+    /// holds the job.
+    fn remove<'a>(
+        &'a self,
+        queue: &'a str,
+        id: uuid::Uuid,
+    ) -> BoxFuture<'a, Result<bool, OutboxError>>;
+
+    /// [`remove`](Self::remove) for the record carrying the unique key `key`
+    /// on `queue`.
+    fn remove_unique<'a>(
+        &'a self,
+        queue: &'a str,
+        key: &'a str,
+    ) -> BoxFuture<'a, Result<bool, OutboxError>>;
+}
+
+/// The outbox as a transaction writes into it
+/// ([`HeldTransaction::outbox`](crate::HeldTransaction::outbox)): the queue
+/// port's side of the store its relay drains.
+pub trait Outbox: OutboxKept {
+    /// Write `records` on the handle's transaction, so they commit or roll
+    /// back with its writes. What the driver owes: the records land in the
+    /// store exactly when the unit commits, the relay's
+    /// [`written`](OutboxStore::written) wakes once it did, and a unit that
+    /// never opened its transaction opens it, since the write is a touch. A
+    /// failed write fails the unit as a failed statement does.
+    fn write(&self, records: Vec<OutboxRecord>) -> BoxFuture<'_, Result<(), OutboxError>>;
+}
+
 /// The relay's side of the outbox a data driver keeps: bound as
 /// `Arc<dyn OutboxStore>` by the driver's binding, read by the queue port's
 /// relay, which files what committed units wrote.
 ///
-/// A driver whose executors keep records ([`Executor::write_outbox`](crate::Executor::write_outbox))
-/// binds one, and its handles write nothing until [`arm`](Self::arm) ran: a
-/// record written while no relay drains the store would never be filed.
+/// A driver whose transactions keep records ([`Outbox::write`]) binds one, and
+/// its handles answer no outbox until [`arm`](Self::arm) ran: a record written
+/// while no relay drains the store would never be filed.
 pub trait OutboxStore: Send + Sync + 'static {
-    /// Prove the store's table exists and arm the driver's executors to write
+    /// Prove the store's table exists and arm the driver's handles to write
     /// into it: called once, by the relay, before the app serves. A table that
     /// is not there answers [`OutboxError::Missing`], naming the remedy, and
     /// the boot refuses.

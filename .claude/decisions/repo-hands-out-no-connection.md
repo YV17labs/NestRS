@@ -416,3 +416,19 @@ denial, seen on the merge base, where `#[crud]` answered `403`. sea-orm's own
 - **`DbOutcome` kept public**: two ways to tell a class, and it read a `DbErr`.
 - **A variant per integrity condition now** (`23502`, `23514`, `23P01`): no caller branches
   on one; `<Condition>Violation(Diagnostics)` places each when one does (`TODO.md`).
+
+## 2026-11-26 — the handle holds a crate-private type, found by what it holds
+
+The port's `Executor` lost `as_any`: it says what a handle holds, `Holds::Pool` or
+`Holds::Transaction` (`transactional-outbox.md` and `resilience-policy.md`, this
+date). So the first entry's "a crate-private wrapper (`Installed`) whose `as_any`
+hands out itself" now reads: the handle a unit installs holds a crate-private
+`InstalledPool` or `InstalledTransaction` (a unit's lazy transaction, or a block's
+savepoint), and the driver's query API recovers its own type with
+`Holds::downcast_ref`, through every wrapper installed around it — an atomic block
+answers what it wraps. A downcast of `nest_rs_database::current_executor()` still
+finds no type a service can name. `Installed`, `PoolUnit` and `KeepingPool` became
+those two types, and `SeaOrmExecutor`'s ten methods matching the old trait's went
+with them. Held by seaorm's
+`unit::no_handle_a_unit_installs_downcasts_to_an_executor_a_service_can_name`, which
+also tries sea-orm's `DatabaseConnection` and `DatabaseTransaction`.

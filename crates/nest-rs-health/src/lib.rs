@@ -14,7 +14,10 @@
 //!
 //! Indicators run concurrently under a per-indicator ceiling and a probe-wide
 //! deadline ([`HealthConfig`]), both inside Kubernetes' one-second
-//! `timeoutSeconds` default.
+//! `timeoutSeconds` default. The sooner of the two is the
+//! [`Deadline`](nest_rs_core::Deadline) each check runs under, as a request's
+//! is its handler's: a call a check makes under a resilience policy ends
+//! there, a timeout its breaker counts, before the probe drops it.
 //!
 //! Indicators are declared with [`indicators`] on an `#[injectable]` provider's
 //! `impl` block; one whose provider lives in an unimported module does not run.

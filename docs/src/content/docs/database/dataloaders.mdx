@@ -131,6 +131,13 @@ Three properties make this loader correct:
   applies, so a batch on behalf of one caller never returns another
   tenant's rows.
 
+The error the method answers is the loader's, which async-graphql bounds `Send`,
+`Clone` and `'static`, handing each key of the batch a clone of it. It is `pub`
+too: the loader `#[dataloader]` emits is `pub` and names it in its `Loader`
+impl, so a `pub(crate)` error is rustc's `E0446`. A batch run under a
+[resilience policy](/fundamentals/resilience/) answers `ResilienceError<E>`,
+which is `Clone` where `E` is.
+
 ## Reading a loader
 
 A `#[field_resolver]` takes the loader as a parameter and calls `.load_one(key)`

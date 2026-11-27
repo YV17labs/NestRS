@@ -154,8 +154,18 @@ struct RefusedUnit;
 struct NoExecutor;
 
 impl nest_rs_database::Executor for NoExecutor {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for NoExecutor {
+    fn transaction(&self) -> std::sync::Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 

@@ -152,8 +152,8 @@ impl AmbientValue for Tenant {}
 ```
 
 The unit's deadline is one of them too: every unit its edge cuts at a deadline —
-a request, a socket's message, a job's attempt — carries
-`nest_rs::core::Deadline`, the instant it ends by, so a call you wait on can
+a request, a socket's message, a job's attempt, a health indicator's check —
+carries `nest_rs::core::Deadline`, the instant it ends by, so a call you wait on can
 give up before the cut, as a [resilience policy](/fundamentals/resilience/)
 does. A unit nested in another ends by the sooner of the two.
 

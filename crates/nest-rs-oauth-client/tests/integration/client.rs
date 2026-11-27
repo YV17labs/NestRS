@@ -994,6 +994,42 @@ async fn a_composed_client_refused_a_handshake_names_no_variable_it_never_reads(
     );
 }
 
+/// `fetch` reads a URL no variable names, so a handshake its endpoint refuses
+/// has no remedy to give: the alert the endpoint sent says why, by its name —
+/// what tells a client certificate that expired from one never presented.
+#[tokio::test]
+async fn a_fetch_refused_a_handshake_says_the_alert_the_endpoint_sent() {
+    for (code, alert) in [(45, "CertificateExpired"), (116, "CertificateRequired")] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut hello = [0; 4096];
+                let _ = socket.read(&mut hello).await;
+                // One TLS record: an alert (21), TLS 1.2 (3, 3), two bytes —
+                // fatal (2), then the alert's code.
+                let _ = socket.write_all(&[21, 3, 3, 0, 2, 2, code]).await;
+                while socket.read(&mut hello).await.is_ok_and(|read| read > 0) {}
+            }
+        });
+
+        let refused = client_for(addr)
+            .fetch::<serde_json::Value>(
+                &format!("https://{addr}/user/emails?key={QUERY_SECRET}"),
+                ACCESS_TOKEN,
+            )
+            .await
+            .expect_err("the endpoint refuses the handshake");
+        assert_eq!(
+            unavailable_sentence_of(&refused, &[]),
+            format!(
+                "the OAuth provider's endpoint (https://{addr}/user/emails) could not be called: \
+                 error sending request: received fatal alert: {alert}"
+            ),
+        );
+    }
+}
+
 /// A redirect is an answer, never followed: a provider's `3xx` could send the
 /// bearer token anywhere.
 #[tokio::test]

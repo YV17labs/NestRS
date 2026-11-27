@@ -1,12 +1,12 @@
 ---
 title: What's new in 7.0
-description: "What NestRS 7.0 brings, part by part, and why every 7.x release builds on it without breaking what you wrote."
+description: "What NestRS 7.0 brings, part by part, and why every minor and patch builds on it without breaking what you wrote."
 ---
 
 NestRS 7.0 is the foundation the next versions build on. Each concern a backend
 repeats has one way to be declared, one contract on every edge, and a boot that
 refuses it when it is wired wrong. What you write stays business logic, and no
-7.x release breaks it.
+minor or patch breaks it.
 
 ```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
 #[post("/{id}/publish")]
@@ -192,20 +192,20 @@ answers its first request about 10 ms after it starts. The
 [benchmarks](/benchmarks/) hold every tier, the protocol, and the one command
 that replays it on your hardware.
 
-## What 7.x keeps
+## What a major keeps
 
-The foundation comes with a promise: no 7.x release breaks what you build on.
+The foundation comes with a promise: no minor or patch breaks what you build on.
 Your code compiles, your configuration boots, and your log filters and alerts
 keep matching. The libraries you write in your own code — `sea-orm`,
 `async-graphql`, `rmcp`, `validator` — keep their majors for the whole line.
-A minor adds, a patch fixes, and a break waits for 8.0. The one exception is a
+A minor adds, a patch fixes, and a break waits for the next major. The one exception is a
 security fix refusing an insecure configuration, which the upgrading guide
 names with the secure one to write.
 
 What comes next builds on the same seams. A driver for another backend, a
 transport or a package of your own plugs in where the framework's own modules
 do — [Extending NestRS](/extending/) is that contract, and the [semver
-policy](/semver/) says exactly what 7.x covers.
+policy](/semver/) says exactly what a major covers.
 
 ## Limits
 

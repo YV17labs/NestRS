@@ -119,10 +119,15 @@ so a reader slower than the dependency is never cut.
 A request sent inside an attempt of its own policy, from a `policy.run(…)` or a
 method `#[resilient]` with that policy, is a call that attempt makes. It shares
 the attempt's slot and turn of the breaker while no other call does, the first
-taking its token. It counts in that attempt, once: a failure of its, its body's
-included, fails the attempt. A request sent while another shares them takes its
-own, as a request sent alone does. Each is sent once: the attempt around it is
-what the policy sends again. A body read after the attempt has answered, from a
+taking its token, and shares the turn only while the breaker has neither
+opened nor been switched by hand since the attempt was let through: after that
+it meets the breaker as any request does, refused unsent while it is open. It
+counts in that attempt, once: a failure of its, its body's included, fails the
+attempt. A request sent while another shares them takes its own, as a request
+sent alone does. Inside an attempt the policy may still send again, each is
+sent once, that attempt being what is sent again; inside one it never sends
+again, a run once or the last attempt, it is sent again as the middleware
+sends any request. A body read after the attempt has answered, from a
 response handed out of the `run`, holds nothing of the policy.
 
 ## Test it

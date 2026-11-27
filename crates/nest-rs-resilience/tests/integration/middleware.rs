@@ -1774,6 +1774,25 @@ async fn a_request_sent_inside_an_attempt_of_its_own_policy_is_counted_once_by_t
     );
 }
 
+/// An idempotent request sent inside an attempt its policy never sends again
+/// — a run once — is sent again as the middleware's retries say: nothing
+/// around it multiplies them.
+#[tokio::test]
+async fn a_request_sent_inside_an_attempt_never_sent_again_is_sent_again() {
+    let peer = answering([PeerAnswer::status(503)]).await;
+    let (_app, policy) = policy(retrying()).await;
+    let http = client(Arc::clone(&policy));
+    let url = peer.url(PARCEL);
+
+    let answered = policy
+        .run(|| async { Ok::<_, CarrierFailed>(http.get(&url).send().await?.status()) })
+        .await
+        .expect("answered");
+
+    assert_eq!(answered, StatusCode::OK, "the request sent again answered");
+    assert_eq!(peer.requests().len(), 2, "sent again once");
+}
+
 /// A nested request's body gives the attempt's slot back as it ends: two
 /// parcels read whole one after the other inside one attempt under a
 /// bulkhead of one both answer, the second on the slot the first gave back.

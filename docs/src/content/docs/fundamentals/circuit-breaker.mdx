@@ -29,7 +29,7 @@ The breaker counts the latest `BREAKER_WINDOW` attempts. Once `BREAKER_FAILURES`
 of them failed, it opens: every call is refused at once, unsent, for
 `BREAKER_OPEN_SECS`. Then one call probes the dependency while the others are
 still refused, but for the calls of its policy the probe makes itself, which
-share its turn. Its failure opens the breaker again, and its success closes it,
+share its turn while it holds it. Its failure opens the breaker again, and its success closes it,
 or counts toward the [series of probes](#an-age-and-a-series-of-probes)
 `BREAKER_PROBES` asks for.
 

@@ -109,12 +109,16 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// A request sent inside an attempt of its own policy — a
 /// [`run`](ResiliencePolicy::run) of it, or a method `#[resilient]` with it —
 /// is a call that attempt makes. It shares the attempt's slot and turn of the
-/// breaker while no other call does, the first taking its token, and counts
+/// breaker while no other call does, the first taking its token — the turn
+/// only while the breaker has neither opened nor been switched by hand since
+/// the attempt was let through, refused unsent once it is open — and counts
 /// in that attempt, once: a failure of its, its body's included, fails the
 /// attempt. A request sent while another shares them takes its own, as one
 /// sent alone does, so `CONCURRENCY` and `RATE_LIMIT` bound the requests an
-/// attempt fans out. Each is sent once: the attempt around it is what the
-/// policy sends again. A body read after that attempt has answered holds
+/// attempt fans out. Inside an attempt the policy may still send again, each
+/// is sent once, that attempt being what is sent again; inside one it never
+/// sends again — a run once, or the last attempt — it is sent again as any
+/// request is. A body read after that attempt has answered holds
 /// nothing of the policy.
 ///
 /// So a response is read or dropped, never kept: one held unread holds its

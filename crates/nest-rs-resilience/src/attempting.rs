@@ -4,7 +4,10 @@
 //! attempt. The attempt keeps its slot of the bulkhead and its turn of the
 //! breaker until it answers, and shares each with one such call at a time,
 //! which gives it back as it ends; the first call let through takes its token
-//! of the rate. A call sharing its turn counts in the attempt's outcome, once.
+//! of the rate. A call sharing its turn counts in the attempt's outcome, once,
+//! and shares it only while the breaker is in the epoch the attempt was let
+//! through in. A call made in an attempt its policy may still send again is
+//! sent once, that attempt being what is sent again.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -31,8 +34,9 @@ pub(crate) struct Lent {
     /// Whether its slot of the bulkhead is free to share: it holds one, and
     /// no call shares it now.
     slot: bool,
-    /// Whether its turn of the breaker is free to share.
-    turn: bool,
+    /// The epoch of the breaker its turn was let through in, while that turn
+    /// is free to share.
+    turn: Option<u64>,
     /// Whether its token of the rate is still to take.
     token: bool,
     /// What only a failure or a wait for its slot brings, out of line so a
@@ -52,10 +56,10 @@ struct Met {
 
 impl Lent {
     /// What an attempt sent now shares, holding a slot or not, a turn of the
-    /// breaker or not, and a token of the rate or not: nothing of the attempt
-    /// before it, whose calls are over.
+    /// breaker let through in an epoch or not, and a token of the rate or not:
+    /// nothing of the attempt before it, whose calls are over.
     #[inline]
-    pub(crate) fn renew(&mut self, slot: bool, turn: bool, token: bool) {
+    pub(crate) fn renew(&mut self, slot: bool, turn: Option<u64>, token: bool) {
         self.name = None;
         self.slot = slot;
         self.turn = turn;
@@ -69,7 +73,7 @@ impl Lent {
     /// thread nothing.
     #[inline]
     fn lends(&self) -> bool {
-        self.slot || self.turn || self.token || self.name.is_some()
+        self.slot || self.turn.is_some() || self.token || self.name.is_some()
     }
 
     /// What a call sharing the attempt's turn failed on, taken: the attempt
@@ -115,20 +119,32 @@ impl Drop for SharedSlot {
     }
 }
 
-/// The turn of the breaker of the attempt named `0` a call shares, given back
-/// as it ends with what it failed on, or as it is dropped with nothing.
+/// The turn of the breaker of the attempt named `name` a call shares, let
+/// through in `epoch`, given back as it ends with what it failed on, or as it
+/// is dropped with nothing.
 #[must_use = "a shared turn is given back as it ends"]
-pub(crate) struct SharedTurn(NonZeroU64);
+pub(crate) struct SharedTurn {
+    name: NonZeroU64,
+    epoch: u64,
+}
 
 impl SharedTurn {
+    /// The epoch of the breaker the attempt was let through in: once the
+    /// breaker opened or was switched by hand since, the turn is no longer
+    /// one a call is sent on.
+    #[inline]
+    pub(crate) const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     /// The call sharing the turn ended, failing on `failed` or not: the
     /// attempt counts that failure as its own.
     pub(crate) fn ended(self, failed: Option<Cow<'static, str>>) {
-        let name = self.0;
+        let (name, epoch) = (self.name, self.epoch);
         std::mem::forget(self);
         ATTEMPTING.with(|attempting| {
             attempting.named(name, |lent| {
-                lent.turn = true;
+                lent.turn = Some(epoch);
                 if let Some(failed) = failed {
                     lent.met().failed.get_or_insert(failed);
                 }
@@ -139,7 +155,8 @@ impl SharedTurn {
 
 impl Drop for SharedTurn {
     fn drop(&mut self) {
-        ATTEMPTING.with(|attempting| attempting.named(self.0, |lent| lent.turn = true));
+        let epoch = self.epoch;
+        ATTEMPTING.with(|attempting| attempting.named(self.name, |lent| lent.turn = Some(epoch)));
     }
 }
 
@@ -159,11 +176,12 @@ impl Taken {
     };
 }
 
-/// One attempt a thread is polling: its policy, and what it lends — read only
-/// when it lends anything, so an attempt lending nothing pays a pointer and a
-/// flag.
+/// One attempt a thread is polling: its policy, whether it may still be sent
+/// again, and what it lends — read only when it lends anything, so an attempt
+/// lending nothing pays a pointer and two flags.
 struct Entry {
     policy: Cell<*const Mechanisms>,
+    again: Cell<bool>,
     lends: Cell<bool>,
     lent: Cell<Option<Lent>>,
 }
@@ -172,6 +190,7 @@ impl Entry {
     const fn empty() -> Self {
         Self {
             policy: Cell::new(std::ptr::null()),
+            again: Cell::new(false),
             lends: Cell::new(false),
             lent: Cell::new(None),
         }
@@ -199,12 +218,13 @@ struct Polling {
 
 impl Polling {
     #[inline]
-    fn push(&self, policy: *const Mechanisms, lent: Option<Lent>) -> usize {
+    fn push(&self, policy: *const Mechanisms, again: bool, lent: Option<Lent>) -> usize {
         let len = self.len.get();
         let lends = lent.is_some();
         match self.inline.get(len) {
             Some(free) => {
                 free.policy.set(policy);
+                free.again.set(again);
                 free.lends.set(lends);
                 if lends {
                     free.lent.set(lent);
@@ -212,6 +232,7 @@ impl Polling {
             }
             None => self.deeper.borrow_mut().push(Entry {
                 policy: Cell::new(policy),
+                again: Cell::new(again),
                 lends: Cell::new(lends),
                 lent: Cell::new(lent),
             }),
@@ -220,17 +241,26 @@ impl Polling {
         len
     }
 
-    fn contains(&self, policy: *const Mechanisms) -> bool {
+    /// Whether the innermost attempt of `policy` the thread polls may still
+    /// be sent again, when it polls one.
+    fn again(&self, policy: *const Mechanisms) -> Option<bool> {
         let len = self.len.get();
+        if len > INLINE
+            && let Some(again) = self
+                .deeper
+                .borrow()
+                .iter()
+                .rev()
+                .find(|held| held.policy.get() == policy)
+                .map(|held| held.again.get())
+        {
+            return Some(again);
+        }
         self.inline[..len.min(INLINE)]
             .iter()
-            .any(|held| held.policy.get() == policy)
-            || (len > INLINE
-                && self
-                    .deeper
-                    .borrow()
-                    .iter()
-                    .any(|held| held.policy.get() == policy))
+            .rev()
+            .find(|held| held.policy.get() == policy)
+            .map(|held| held.again.get())
     }
 
     /// `change` made to what the innermost attempt of `policy` the thread
@@ -311,11 +341,12 @@ pub(crate) struct Attempting {
 }
 
 impl Attempting {
-    /// The poll of an attempt of `policy`'s, lending what `lent` shares.
+    /// The poll of an attempt of `policy`'s, which its run or one around it
+    /// may still send `again`, lending what `lent` shares.
     #[inline]
-    pub(crate) fn enter(policy: &Mechanisms, lent: &mut Lent) -> Self {
+    pub(crate) fn enter(policy: &Mechanisms, again: bool, lent: &mut Lent) -> Self {
         let lent = lent.lends().then(|| std::mem::take(lent));
-        let around = ATTEMPTING.with(|attempting| attempting.push(policy, lent));
+        let around = ATTEMPTING.with(|attempting| attempting.push(policy, again, lent));
         Self { around }
     }
 
@@ -325,11 +356,13 @@ impl Attempting {
         ATTEMPTING.with(|attempting| attempting.pop(self.around))
     }
 
-    /// Whether this thread is polling an attempt of `policy`'s now.
+    /// Whether the innermost attempt of `policy`'s this thread polls now may
+    /// still be sent again, by its run or by one around it, when it polls
+    /// one.
     #[inline]
-    pub(crate) fn inside(policy: &Mechanisms) -> bool {
+    pub(crate) fn inside(policy: &Mechanisms) -> Option<bool> {
         let pointer: *const Mechanisms = policy;
-        ATTEMPTING.with(|attempting| attempting.contains(pointer))
+        ATTEMPTING.with(|attempting| attempting.again(pointer))
     }
 
     /// The slot of the innermost attempt of `policy` the thread polls, shared,
@@ -362,14 +395,18 @@ impl Attempting {
     }
 
     /// What a call let through takes of the innermost attempt of `policy` the
-    /// thread polls: its turn of the breaker, when no call shares it now, and
-    /// its token of the rate, when no call took it.
+    /// thread polls: its turn of the breaker, when no call shares it now —
+    /// sent on only while the breaker is in the turn's epoch — and its token
+    /// of the rate, when no call took it.
     pub(crate) fn take(policy: &Mechanisms) -> Taken {
         let pointer: *const Mechanisms = policy;
         ATTEMPTING
             .with(|attempting| {
                 attempting.innermost(pointer, |lent| Taken {
-                    turn: std::mem::take(&mut lent.turn).then(|| SharedTurn(lent.name())),
+                    turn: lent.turn.take().map(|epoch| SharedTurn {
+                        name: lent.name(),
+                        epoch,
+                    }),
                     token: std::mem::take(&mut lent.token),
                 })
             })

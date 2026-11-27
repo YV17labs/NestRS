@@ -198,7 +198,11 @@ was.
   and turn.** A decorated method may call another of its policy, directly or
   through a call under another. Such a call shares the attempt's slot and turn of
   the breaker while no other call does, and gives them back as it ends. The first
-  takes the attempt's token. The attempt counts once in the breaker: as a failure
+  takes the attempt's token. It shares the turn only while the breaker has
+  neither opened nor been switched by hand since the attempt was let through:
+  once it has, every call the attempt makes meets the breaker as any call does,
+  refused `Open` unsent while it is open, so a job looping over a dead partner
+  stops sending the moment the breaker opens beside it. The attempt counts once in the breaker: as a failure
   when its own answer fails or a call sharing its turn failed, otherwise as its
   own answer is judged. So a `charge()` that fails after its token helper
   answered counts a failure, a failure propagated counts once, and a probe so
@@ -210,8 +214,12 @@ was.
   `CONCURRENCY_WAIT_MS` for one or for the attempt's, and with no wait, the
   default, it is refused `Full` at once. So twenty pages read inside one `import()`
   meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Each is sent under
-  its own timeout, and once: the attempt around it is what the policy sends
-  again. A call spawned onto a task of its own is a call of its own.
+  its own timeout. Made in an attempt the policy may still send again, an
+  `idempotent` one is sent once, that attempt being what is sent again, and an
+  error of its the attempt swallows is sent no more; made in
+  one it never sends again, a method run once or the last attempt, it is sent
+  again as its own `RETRIES` say, since nothing around it multiplies them. A call
+  spawned onto a task of its own is a call of its own.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no
   `fallback` and no `record_if` naming an argument, an argument the body reads nowhere and the part

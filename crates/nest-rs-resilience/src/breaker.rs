@@ -876,6 +876,12 @@ pub(crate) struct Sent<'b> {
 }
 
 impl Sent<'_> {
+    /// The epoch the attempt was let through in.
+    #[inline]
+    pub(crate) const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     /// Whether the instant the attempt's bound ends at has passed: dropped
     /// now, it has timed out unless its call answered in time.
     pub(crate) fn overdue(&self) -> bool {
@@ -1103,6 +1109,14 @@ impl Breaker {
             epoch: held.epoch,
             until: None,
         }
+    }
+
+    /// Whether the breaker has neither opened nor been switched by hand since
+    /// an attempt was let through in `epoch` — nor had an overdue probe's
+    /// turn taken — read off the published word with no lock.
+    #[inline]
+    pub(crate) fn current(&self, epoch: u64) -> bool {
+        self.published.word().epoch() == epoch
     }
 
     /// How long a call is refused for now, leaving the breaker as it stands:

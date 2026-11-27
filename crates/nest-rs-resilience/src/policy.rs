@@ -414,8 +414,9 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// Open the circuit breaker by hand for `duration`, an open time
     /// [`breaker_open`](ResilienceConfig::breaker_open) takes in code, above
     /// zero and up to an hour: every call is refused unsent, as by an open
-    /// breaker, told what is left of it, then the breaker probes the
-    /// dependency as after any opening.
+    /// breaker, told what is left of it — one an attempt in flight makes of
+    /// this policy included — then the breaker probes the dependency as after
+    /// any opening.
     ///
     /// Whatever the breaker was in, `duration` counts from now and replaces
     /// any open time it had, shorter or longer, and its window is forgotten:

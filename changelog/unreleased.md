@@ -161,7 +161,9 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   or a request a client under that policy's `ResilienceMiddleware` sends there —
   is a call that attempt makes. It shares the attempt's slot and turn of the
   breaker, a probe's included, while no other call does, the first taking its
-  token. The attempt keeps its slot until it answers, so `CONCURRENCY` bounds
+  token; the turn only while the breaker has neither opened nor been switched by
+  hand since the attempt was let through, after which each call meets the
+  breaker as any does, refused `Open` unsent while it is open. The attempt keeps its slot until it answers, so `CONCURRENCY` bounds
   its body past the call, and it counts once: a failure when its own answer or
   a call sharing its turn failed, otherwise as its answer is judged. A call made
   while another shares them takes a free slot of its own, or, waiting
@@ -169,8 +171,10 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   refused `Full` at once with no wait — and its own token and turn, and counts
   its own outcome. So `CONCURRENCY`
   and `RATE_LIMIT` bound the calls an attempt fans out as they bound calls made
-  alone. Each is sent under its own timeout and sent once, the attempt around it
-  being what is sent again. The method's error
+  alone. Each is sent under its own timeout. Inside an attempt its policy may
+  still send again an idempotent one is sent once, that attempt being what is
+  sent again; inside one never sent again — a run once, or the last attempt —
+  it keeps its own retries, which nothing around it multiplies. The method's error
   owns what it says (`'static`), one borrowing an argument being rustc's lifetime
   error at the answer.
 - **A fallback answers in place of the error a run ends on.**

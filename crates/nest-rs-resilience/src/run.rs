@@ -113,8 +113,11 @@ impl<'p> Terms<'p> {
     /// its turn, telling the breaker when it has answered at the latest;
     /// otherwise it is refused, taking nothing, told the time to that token.
     /// With no rate, nothing of the rate's runs: no lock, no clock read, no
-    /// timer. A call sharing the turn of the attempt it is made in asks the
-    /// breaker nothing, and one holding that attempt's `token` takes none.
+    /// timer. A call sharing the turn of the attempt it is made in, `shares`
+    /// naming the epoch that attempt was let through in, asks the breaker
+    /// nothing while the breaker's published word is still in that epoch, and
+    /// meets the breaker as any call does once it opened or was switched by
+    /// hand since; one holding that attempt's `token` takes none.
     // Inlined, the rate's step alone left out of line: a run with no rate pays no
     // call to be let through.
     #[inline(always)]
@@ -122,23 +125,20 @@ impl<'p> Terms<'p> {
         &self,
         pass: &mut Option<Pass<'p>>,
         reserved: &mut Option<Reservation<'p>>,
-        shares: bool,
+        shares: Option<u64>,
         token: bool,
     ) -> Admission<'p> {
         let bound = self.bound();
         if bound.wait.is_zero() {
             return Admission::Refused(ResilienceRefusal::OUT_OF_TIME);
         }
+        let breaker = self.policy.breaker.as_ref();
+        let shared =
+            shares.is_some_and(|epoch| breaker.is_some_and(|breaker| breaker.current(epoch)));
         // While this one waited for its token, another call may have opened the
         // breaker or taken the probe's turn, and a manual switch voids a turn held.
-        if !shares && !pass.as_ref().is_some_and(Pass::probes) {
-            match self
-                .policy
-                .breaker
-                .as_ref()
-                .map(|breaker| breaker.admit(bound.wait))
-                .transpose()
-            {
+        if !shared && !pass.as_ref().is_some_and(Pass::probes) {
+            match breaker.map(|breaker| breaker.admit(bound.wait)).transpose() {
                 Ok(admitted) => *pass = admitted,
                 Err(retry_after) => {
                     return Admission::Refused(ResilienceRefusal::Open { retry_after });
@@ -202,8 +202,9 @@ pin_project_lite::pin_project! {
         // is handed to finds the token this one left.
         reserved: Option<Reservation<'p>>,
         pass: Option<Pass<'p>>,
-        // Whether the call shares the turn of the attempt it is made in.
-        shares: bool,
+        // The epoch the turn the call shares was let through in, when it shares
+        // the turn of the attempt it is made in.
+        shares: Option<u64>,
         #[pin]
         due: Sleep,
     }
@@ -362,9 +363,9 @@ struct Lending<'r> {
 
 impl<'r> Lending<'r> {
     #[inline]
-    fn enter(policy: &Mechanisms, lent: &'r mut Lent) -> Self {
+    fn enter(policy: &Mechanisms, again: bool, lent: &'r mut Lent) -> Self {
         Self {
-            attempting: Attempting::enter(policy, lent),
+            attempting: Attempting::enter(policy, again, lent),
             lent,
         }
     }
@@ -419,8 +420,12 @@ pin_project_lite::pin_project! {
         // When the last attempt was sent, for a run that holds its answer.
         sent_at: Option<Instant>,
         // Whether the run opened inside an attempt of its own policy, a call that
-        // attempt makes: sent once, the attempt around it being what is sent again.
+        // attempt makes.
         nested: bool,
+        // Whether that attempt may still be sent again, by its run or one around
+        // it: the run is then sent once, the attempt around it being what is
+        // sent again.
+        again_around: bool,
         // What the last attempt shares with the calls of its policy it makes.
         lent: Lent,
     }
@@ -465,6 +470,7 @@ impl<'p> Run<'p> {
             holds: false,
             sent_at: None,
             nested: false,
+            again_around: false,
             lent: Lent::default(),
         }
     }
@@ -514,7 +520,10 @@ impl<'p> Run<'p> {
     /// that attempt's slot while no other call does; otherwise it is opened
     /// so, and takes the attempt's slot should it come back before one is
     /// freed within the bulkhead's wait — with none, it is refused `Full` at
-    /// once.
+    /// once. Opened inside an attempt its policy may still send again, the
+    /// run sends its call once, that attempt being what is sent again; inside
+    /// one never sent again — a run once, or the last attempt of a run — it
+    /// keeps its own retries, which nothing around it multiplies.
     pub(crate) fn poll_open(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -525,9 +534,12 @@ impl<'p> Run<'p> {
             policy.observed.at_run();
             this.terms.deadline = nest_rs_core::__private::deadline();
             *this.stage = Stage::Arriving;
-            if Attempting::inside(policy) {
+            if let Some(again) = Attempting::inside(policy) {
                 *this.nested = true;
-                *this.retries = 0;
+                if again {
+                    *this.again_around = true;
+                    *this.retries = 0;
+                }
                 // The attempt's own slot, which a bulkhead of one would otherwise refuse it.
                 if policy.bulkhead.is_some()
                     && let Some(shared) = Attempting::slot(policy)
@@ -609,7 +621,8 @@ impl<'p> Run<'p> {
     /// savepoint back before it unwinds on. A run opened inside an attempt of
     /// its own policy shares that attempt's turn of the breaker, a probe's
     /// included, while no other call does, and takes its token of the rate
-    /// when no call took it: it then asks the breaker nothing, or the rate.
+    /// when no call took it: it then asks the rate nothing, and the breaker
+    /// nothing while it is in the epoch that attempt was let through in.
     pub(crate) fn poll_attempt(
         mut self: Pin<&mut Self>,
         mut call: Pin<&mut (dyn Calling + '_)>,
@@ -621,7 +634,7 @@ impl<'p> Run<'p> {
             } else {
                 Taken::NOTHING
             };
-            let shares = turn.is_some();
+            let shares = turn.as_ref().map(SharedTurn::epoch);
             let (mut pass, mut reserved) = (None, None);
             let admitted = self.terms.admit(&mut pass, &mut reserved, shares, token);
             if let Some(turn) = turn {
@@ -672,8 +685,9 @@ impl<'p> Run<'p> {
             call: call.as_mut(),
             given_up: this.given_up,
         };
+        let again = *this.again_around || (*this.idempotent && *this.resent < *this.retries);
         let polled = {
-            let _lending = Lending::enter(this.terms.policy, this.lent);
+            let _lending = Lending::enter(this.terms.policy, again, this.lent);
             match this.savepoint {
                 Some(savepoint) => within.poll(pin!(savepoint.around(Pin::new(&mut erased))), cx),
                 None => within.poll(Pin::new(&mut erased), cx),
@@ -696,9 +710,16 @@ impl<'p> Run<'p> {
         if let Some(pass) = pass {
             *this.attempt = Some(Attempt::Sent(pass.send(bound.wait, bound.until)));
         }
+        let turn = match this.attempt {
+            Some(Attempt::Sent(sent)) => Some(sent.epoch()),
+            Some(Attempt::Shared(turn)) => Some(turn.epoch()),
+            #[cfg(feature = "reqwest")]
+            Some(Attempt::Outstanding(Outstanding(sent))) => sent.as_ref().map(Sent::epoch),
+            None => None,
+        };
         this.lent.renew(
             this.slot.is_some() || this.shared_slot.is_some(),
-            this.attempt.is_some(),
+            turn,
             this.terms.policy.rate.is_some(),
         );
         *this.bound = bound.wait;
@@ -7254,37 +7275,168 @@ mod tests {
         assert_eq!(policy.concurrency_running(), Some(0), "its slot freed");
     }
 
-    /// An idempotent call made inside an attempt of its own policy is sent
-    /// once: the attempt around it is the one its policy sends again, so a
-    /// failure there is sent no more than that attempt is, and counted once.
+    /// An idempotent call made inside an attempt its policy never sends again
+    /// — a run once, or the last attempt of a run sent again — is sent again
+    /// as its own retries say: nothing around it multiplies them, so nothing
+    /// takes them away. Inside an attempt still to be sent again it is sent
+    /// once, and a call nested in that one too.
     #[tokio::test(start_paused = true)]
-    async fn an_idempotent_call_nested_in_an_attempt_of_its_own_policy_is_sent_once() {
+    async fn an_idempotent_call_nested_in_an_attempt_never_sent_again_is_sent_again() {
         let policy = policy(ResilienceConfig {
-            retries: Some(3),
+            retries: Some(2),
             breaker_window: Some(10),
             breaker_failures: 10,
             ..ResilienceConfig::default()
         });
         let calls = AtomicU32::new(0);
-        let failed = policy
-            .run(|| async {
-                policy
-                    .run_idempotent(|| async {
-                        calls.fetch_add(1, Ordering::Relaxed);
-                        Err::<(), _>(Refused)
-                    })
-                    .await
-            })
-            .await;
+        let failing = || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Err::<(), _>(Refused)
+        };
+
+        let once = policy.run(|| policy.run_idempotent(failing)).await;
         assert!(
             matches!(
-                failed,
+                once,
                 Err(ResilienceError::Failed(ResilienceError::Failed(Refused)))
             ),
-            "{failed:?}"
+            "{once:?}"
         );
-        assert_eq!(calls.load(Ordering::Relaxed), 1, "sent once");
-        assert_eq!(counted(&policy), (1, 1), "counted once");
+        assert_eq!(
+            calls.swap(0, Ordering::Relaxed),
+            3,
+            "inside a run once, sent again twice"
+        );
+        assert_eq!(counted(&policy), (1, 1), "counted once, by the run once");
+
+        let again = policy
+            .run_idempotent(|| policy.run_idempotent(failing))
+            .await;
+        assert!(again.is_err(), "{again:?}");
+        assert_eq!(
+            calls.swap(0, Ordering::Relaxed),
+            1 + 1 + 3,
+            "once in each attempt sent again, then twice again in the last"
+        );
+
+        let deeper = policy
+            .run_idempotent(|| policy.run_idempotent(|| policy.run_idempotent(failing)))
+            .await;
+        assert!(deeper.is_err(), "{deeper:?}");
+        assert_eq!(
+            calls.swap(0, Ordering::Relaxed),
+            1 + 1 + (1 + 1 + 3),
+            "once while any attempt around is still to be sent again"
+        );
+    }
+
+    /// What opens a breaker beside an attempt making calls of its policy:
+    /// another caller's failure, or a switch by hand, the attempt a probe or
+    /// not.
+    #[derive(Clone, Copy, Debug)]
+    enum Beside {
+        Failure,
+        Opening,
+        OpeningOnAProbe,
+        Closing,
+    }
+
+    /// A call sharing its attempt's turn of the breaker asks the breaker
+    /// nothing only while the breaker is in the epoch that attempt was let
+    /// through in. Once it opened beside the attempt — on another caller's
+    /// failure, or by hand, the attempt a probe or not — every call the
+    /// attempt makes is refused `Open` unsent; once it was closed by hand,
+    /// the next is let through on its own and counts its own outcome. A loop
+    /// of five pushes, each failure swallowed, sent all five while the
+    /// breaker was open.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_sharing_its_attempts_turn_is_refused_once_the_breaker_opened_beside_it() {
+        for beside in [
+            Beside::Failure,
+            Beside::Opening,
+            Beside::OpeningOnAProbe,
+            Beside::Closing,
+        ] {
+            let partner = policy(ResilienceConfig {
+                retries: None,
+                breaker_window: Some(1),
+                breaker_failures: 1,
+                breaker_open: Duration::from_secs(60),
+                ..ResilienceConfig::default()
+            });
+            if matches!(beside, Beside::OpeningOnAProbe) {
+                partner
+                    .open_breaker(Duration::from_secs(1))
+                    .expect("a breaker");
+                tokio::time::advance(Duration::from_secs(1)).await;
+            }
+            let sent = AtomicU32::new(0);
+            let (opened, opening) = tokio::sync::oneshot::channel::<()>();
+            let (partner, sent) = (&partner, &sent);
+            let pushing = partner.run(|| async move {
+                let mut pushed = Vec::new();
+                let mut opening = Some(opening);
+                for push in 0..5 {
+                    if push == 1 {
+                        match beside {
+                            Beside::Failure => {
+                                if let Some(opening) = opening.take() {
+                                    opening.await.map_err(|_closed| Refused)?;
+                                }
+                            }
+                            Beside::Opening | Beside::OpeningOnAProbe => partner
+                                .open_breaker(Duration::from_secs(60))
+                                .expect("a breaker"),
+                            Beside::Closing => partner.close_breaker().expect("a breaker"),
+                        }
+                    }
+                    pushed.push(
+                        partner
+                            .run(|| async {
+                                sent.fetch_add(1, Ordering::Relaxed);
+                                Err::<(), _>(Refused)
+                            })
+                            .await,
+                    );
+                }
+                Ok::<_, Refused>(pushed)
+            });
+            let failing_beside = async {
+                if matches!(beside, Beside::Failure) {
+                    let failed = partner.run(|| async { Err::<(), _>(Refused) }).await;
+                    assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+                }
+                opened.send(()).ok();
+            };
+            let (pushed, ()) = tokio::join!(pushing, failing_beside);
+            let pushed = pushed.expect("the job answers what its pushes did");
+            let let_through = if matches!(beside, Beside::Closing) {
+                2
+            } else {
+                1
+            };
+            assert_eq!(
+                sent.load(Ordering::Relaxed),
+                u32::try_from(let_through).expect("a few pushes"),
+                "{beside:?}: {pushed:?}"
+            );
+            assert!(
+                pushed[..let_through]
+                    .iter()
+                    .all(|push| matches!(push, Err(ResilienceError::Failed(Refused)))),
+                "{beside:?}: {pushed:?}"
+            );
+            assert!(
+                pushed[let_through..].iter().all(|push| matches!(
+                    push,
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Open { .. },
+                        ..
+                    })
+                )),
+                "{beside:?}: every push past the opening refused unsent: {pushed:?}"
+            );
+        }
     }
 
     /// An attempt whose call answered within its bound, inside a unit whose

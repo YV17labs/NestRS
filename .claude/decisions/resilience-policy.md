@@ -2020,3 +2020,71 @@ record twice (two copies of every attribute list to keep in step).
 (the four counters), `the_default_instance_s_reads_name_no_instance` (the five
 observed reads), and on Redis the plaintext-open, TLS-refusal and Cluster
 refusal line tests.
+
+## 2026-11-27 — a shared turn holds only in its epoch, and a nested call keeps its retries where nothing sends its attempt again
+
+The entry "an attempt keeps its slot and its turn until it answers" let a call
+sharing its attempt's turn ask the breaker nothing for as long as that attempt
+ran. The turn was given back after each call, so a job looping over a partner
+(`sync_all()` calling `push(item)` a thousand times, each failure logged) kept
+sending every push to it after the breaker opened beside it, on other callers'
+failures or by `open_breaker`, each push waiting out its timeout and counting
+nowhere, since the attempt's epoch was stale. `open_breaker`'s rustdoc and the
+breaker page said every call is refused unsent.
+
+The entry "a call nested in its own policy's attempt takes that attempt's turn
+first" zeroed every nested run's retries, "the attempt around it being what is
+sent again". Around a run once, or a run's last attempt, nothing sends it
+again: an `idempotent` token fetch inside a run-once `charge()` was never
+retried, where the same call made anywhere else was.
+
+- **A shared turn carries the breaker's epoch it was let through in**
+  (`SharedTurn::epoch`, `Lent::turn: Option<u64>`). A call taking it reads the
+  breaker's published word, one atomic load and no lock
+  (`Breaker::current`), and shares the turn only while the epoch is the
+  same. Once the breaker opened, was switched by hand or had an overdue
+  probe's turn taken, the call gives the turn back unsent and meets the
+  breaker as any call does: refused `Open` while it is open, let through on a
+  pass of its own, counting its own outcome, once it was closed by hand, or
+  taking the probe's turn once the open time has passed. Refusing `Open`
+  whatever the breaker now says, as the finding proposed, was refused: after
+  `close_breaker` it would refuse a call against a closed breaker. Correctness
+  decided it, one meaning for a call met with the breaker as it stands. The
+  same check runs again after a wait for the rate's token. A probe's own
+  calls keep its turn while its epoch is current, which nothing but a manual
+  switch or an overdue probe's turn being taken moves.
+- **A nested run's retries are zeroed only inside an attempt that may still
+  be sent again**, by its run (`idempotent`, retries left) or by a run of its
+  policy around that one. Each attempt a thread polls says so in its entry
+  (`Attempting::enter(policy, again, lent)`), and a nested run reads the
+  innermost entry of its policy (`Attempting::inside`, now
+  `Option<bool>`), so a call three deep inherits a resend two levels up.
+  Inside a run once or a last attempt, a nested idempotent call keeps its own
+  retries: nothing around it multiplies them, so the storm the zeroing
+  prevents cannot happen there. Correctness decided it, a call declared
+  idempotent is sent again unless something else sends it. The cost is bounded:
+  an outer of `n` retries around an inner of `m` sends the inner at most
+  `n + m + 1` times, where it sent `(n + 1)(m + 1)` before the zeroing.
+
+Held by run.rs's tests
+`a_call_sharing_its_attempts_turn_is_refused_once_the_breaker_opened_beside_it`
+(five pushes, the breaker opened by another caller's failure, by hand, or by
+hand on a probe: one sent, four refused `Open`; closed by hand, the next sent
+on its own and opening it) and
+`an_idempotent_call_nested_in_an_attempt_never_sent_again_is_sent_again`
+(three sends inside a run once, `1 + 1 + 3` inside a run sent again twice, and
+`1 + 1 + (1 + 1 + 3)` three deep), and the middleware suite's
+`a_request_sent_inside_an_attempt_never_sent_again_is_sent_again` (a GET inside
+a run once, answered `503` then `200`, sent again). The test pinning one send
+inside a run once is gone.
+
+Measured in `benches/policy.rs`, A/B on one container (`run`, a call answering
+at once): bare 44.5 → 44.4 ns, breaker 59.3 → 58.0, bulkhead 55.4 → 53.7,
+rate 70.6 → 64.2. No cost is measured; the faster figures are within the
+container's run-to-run spread and claim nothing.
+
+**Not done, named:** a nested call's error the attempt around it swallows,
+answering `Ok`, is not sent again by that attempt either: inside an attempt
+that may still be sent again, such a call is sent once even though its attempt
+will not be resent. Closing it means deciding a resend only once the attempt
+answers, which a nested run cannot know as it opens.

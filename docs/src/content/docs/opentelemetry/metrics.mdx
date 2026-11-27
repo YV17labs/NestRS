@@ -128,8 +128,8 @@ Redis connection is one multiplexed socket, not a pool, and reports none.
 ## Resilience policies
 
 A [resilience policy](/fundamentals/resilience/) counts what it does on four
-counters, each by `nestrs.resilience.instance` — the policy's instance, empty
-for the default one:
+counters, each by `nestrs.resilience.instance` — the policy's instance, which
+the default instance's series carry none of:
 
 | Instrument | One per |
 |---|---|

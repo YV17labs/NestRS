@@ -74,7 +74,7 @@ impl Observed {
         #[cfg(feature = "opentelemetry")]
         {
             let reads = Reads {
-                instance,
+                instance: crate::counters::InstanceAttribute::new(instance),
                 mechanisms: mechanisms.clone(),
                 breaker,
                 bulkhead,
@@ -129,7 +129,7 @@ impl Observed {
 /// instance its instruments say.
 #[cfg(feature = "opentelemetry")]
 struct Reads {
-    instance: &'static str,
+    instance: crate::counters::InstanceAttribute,
     mechanisms: Weak<Mechanisms>,
     breaker: bool,
     bulkhead: bool,
@@ -150,7 +150,7 @@ impl Reads {
         use opentelemetry::KeyValue;
 
         use crate::breaker::BreakerPhase;
-        use crate::counters::{INSTANCE_ATTRIBUTE, STATE_ATTRIBUTE};
+        use crate::counters::STATE_ATTRIBUTE;
 
         let meter = provider.meter("nestrs");
         let instance = self.instance;
@@ -178,10 +178,10 @@ impl Reads {
                     ] {
                         observer.observe(
                             i64::from(phase.as_str() == state),
-                            &[
-                                KeyValue::new(INSTANCE_ATTRIBUTE, instance),
+                            instance.led(&[
+                                instance.lead(),
                                 KeyValue::new(STATE_ATTRIBUTE, phase.as_str()),
-                            ],
+                            ]),
                         );
                     }
                 })
@@ -204,10 +204,8 @@ impl Reads {
                     for (outcome, count) in by_outcome(breaker.stats()) {
                         observer.observe(
                             signed(count),
-                            &[
-                                KeyValue::new(INSTANCE_ATTRIBUTE, instance),
-                                KeyValue::new(OUTCOME_ATTRIBUTE, outcome),
-                            ],
+                            instance
+                                .led(&[instance.lead(), KeyValue::new(OUTCOME_ATTRIBUTE, outcome)]),
                         );
                     }
                 })
@@ -270,7 +268,7 @@ fn observe(
     name: &'static str,
     unit: &'static str,
     description: &'static str,
-    instance: &'static str,
+    instance: crate::counters::InstanceAttribute,
     mechanisms: &Weak<Mechanisms>,
     read: impl Fn(&Mechanisms) -> Option<usize> + Send + Sync + 'static,
 ) {
@@ -281,13 +279,7 @@ fn observe(
         .with_description(description)
         .with_callback(move |observer| {
             if let Some(count) = observed.upgrade().as_deref().and_then(&read) {
-                observer.observe(
-                    signed(count),
-                    &[opentelemetry::KeyValue::new(
-                        crate::counters::INSTANCE_ATTRIBUTE,
-                        instance,
-                    )],
-                );
+                observer.observe(signed(count), instance.led(&[instance.lead()]));
             }
         })
         .build();
@@ -621,6 +613,69 @@ mod tests {
                 .iter()
                 .all(|(_, instance, ..)| instance == "quotes"),
             "the carrier's policy is gone, and its instruments observe nothing"
+        );
+    }
+
+    /// The default instance's reads, named by nothing, are observed with no
+    /// `nestrs.resilience.instance`, as its lines carry no `instance`; a
+    /// named instance's say it.
+    #[tokio::test]
+    async fn the_default_instance_s_reads_name_no_instance() {
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        let config = || ResilienceConfig {
+            retries: None,
+            concurrency: Some(2),
+            rate_limit: Some(5),
+            ..ResilienceConfig::default()
+        };
+        let _default = policy::<nest_rs_core::Unnamed>(config());
+        let _quotes = policy::<Quotes>(config());
+
+        provider.force_flush().expect("the export");
+        let exported = exporter
+            .get_finished_metrics()
+            .expect("the exported metrics");
+        let mut instances: Vec<(&str, Option<String>)> = exported
+            .last()
+            .expect("an export")
+            .scope_metrics()
+            .flat_map(|scope| scope.metrics())
+            .flat_map(|metric| {
+                let AggregatedMetrics::I64(MetricData::Sum(sum)) = metric.data() else {
+                    panic!("an up-down counter: {metric:?}");
+                };
+                sum.data_points()
+                    .map(|point| {
+                        let instance = point
+                            .attributes()
+                            .find(|kv| kv.key.as_str() == INSTANCE_ATTRIBUTE)
+                            .map(|kv| kv.value.to_string());
+                        (metric.name(), instance)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        instances.sort();
+        instances.dedup();
+        let quotes = || Some("quotes".to_owned());
+        assert_eq!(
+            instances,
+            [
+                (BREAKER_OUTCOMES, None),
+                (BREAKER_OUTCOMES, quotes()),
+                (BREAKER_STATUS, None),
+                (BREAKER_STATUS, quotes()),
+                (CONCURRENCY_RUNNING, None),
+                (CONCURRENCY_RUNNING, quotes()),
+                (CONCURRENCY_WAITING, None),
+                (CONCURRENCY_WAITING, quotes()),
+                (RATE_AVAILABLE, None),
+                (RATE_AVAILABLE, quotes()),
+            ]
         );
     }
 

@@ -78,6 +78,17 @@ pub(crate) struct Transition {
     pub(crate) manual: bool,
 }
 
+/// `instance` as a line or a series names it: by its marker's name, and not at
+/// all for the default instance, whose name is empty — a field holding nothing
+/// is left out.
+pub(crate) const fn named(instance: &'static str) -> Option<&'static str> {
+    if instance.is_empty() {
+        None
+    } else {
+        Some(instance)
+    }
+}
+
 /// The `host` a line names a decorated method's call by.
 fn host(method: Option<&ResilientMethod>) -> Option<String> {
     method.map(ResilientMethod::host)
@@ -105,9 +116,15 @@ impl Teller {
         }
     }
 
-    /// The instance the policy is named for, as its lines say it.
+    /// The instance the policy is named for, as its refusals carry it: empty
+    /// for the default instance.
     pub(crate) const fn instance(&self) -> &'static str {
         self.instance
+    }
+
+    /// The `instance` of every line, none for the default instance.
+    const fn named(&self) -> Option<&'static str> {
+        named(self.instance)
     }
 
     /// A subscription to every event told from now on.
@@ -141,7 +158,7 @@ impl Teller {
     pub(crate) fn full(&self, method: Option<&ResilientMethod>, waiters: Option<usize>) {
         tracing::debug!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             host = host(method).as_deref(),
             method = name(method),
             waiters,
@@ -154,7 +171,7 @@ impl Teller {
     pub(crate) fn limited(&self, method: Option<&ResilientMethod>, wait: Duration) {
         tracing::debug!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             host = host(method).as_deref(),
             method = name(method),
             retry_after_ms = millis(wait),
@@ -167,7 +184,7 @@ impl Teller {
     pub(crate) fn waiting_for_token(&self, method: Option<&ResilientMethod>, wait: Duration) {
         tracing::debug!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             host = host(method).as_deref(),
             method = name(method),
             wait_ms = millis(wait),
@@ -203,7 +220,7 @@ impl Teller {
         match error {
             Some(error) => tracing::debug!(
                 target: TARGET,
-                instance = self.instance,
+                instance = self.named(),
                 host = host(method).as_deref(),
                 method = name(method),
                 attempt,
@@ -213,7 +230,7 @@ impl Teller {
             ),
             None => tracing::debug!(
                 target: TARGET,
-                instance = self.instance,
+                instance = self.named(),
                 host = host(method).as_deref(),
                 method = name(method),
                 attempt,
@@ -237,7 +254,7 @@ impl Teller {
     ) {
         tracing::debug!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             host = host(method).as_deref(),
             method = name(method),
             asked_ms = millis(asked),
@@ -258,7 +275,7 @@ impl Teller {
     ) {
         tracing::debug!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             host = host(method).as_deref(),
             method = name(method),
             wait_ms = millis(wait),
@@ -277,7 +294,7 @@ impl Teller {
     ) {
         tracing::debug!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             host = host(method).as_deref(),
             method = name(method),
             error = told(cause).as_str(),
@@ -293,7 +310,7 @@ impl Teller {
         let mut said = None;
         tracing::debug!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             host = method.host(),
             method = method.name(),
             error = said.insert(told(error)).as_str(),
@@ -320,7 +337,7 @@ impl Teller {
         let state = to.as_str();
         tracing::warn!(
             target: TARGET,
-            instance = self.instance,
+            instance = self.named(),
             state,
             failed = failed.map(|(failed, _)| failed),
             window = failed.map(|(_, window)| window),
@@ -332,5 +349,71 @@ impl Teller {
         self.counters.transition(state, manual);
         self.subscribers
             .tell(|| ResilienceEvent::Transition { from, to, manual });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resilient::resilient_method;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("the dependency is down")]
+    struct Down;
+
+    /// Each line the teller of `instance` files, once.
+    fn tell_each(instance: &'static str) -> usize {
+        const TRACK: ResilientMethod = resilient_method(|| "ShipmentsService", "track", None, None);
+        let teller = Teller::new(instance);
+        let wait = Duration::from_millis(100);
+        teller.full(Some(&TRACK), Some(1));
+        teller.limited(Some(&TRACK), wait);
+        teller.waiting_for_token(Some(&TRACK), wait);
+        teller.retrying(Some(&TRACK), 1, wait, Some("down"));
+        teller.retrying(Some(&TRACK), 1, wait, None);
+        teller.past_ceiling(Some(&TRACK), wait, wait, Some("down"));
+        teller.past_deadline(Some(&TRACK), wait, None);
+        teller.unsettled(Some(&TRACK), &Down);
+        teller.fallback(&TRACK, &Down);
+        teller.transition(&Transition {
+            from: BreakerPhase::Closed,
+            to: BreakerPhase::Open,
+            failed: Some((1, 1)),
+            error: Some("down".into()),
+            open_for: Some(wait),
+            manual: false,
+        });
+        10
+    }
+
+    /// A named instance's lines say it as `instance`; the default instance,
+    /// named by nothing, files lines with no `instance`, as a field holding
+    /// nothing is left out everywhere else.
+    #[test]
+    fn every_line_names_a_named_instance_and_the_default_s_name_none() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let lines = || -> Vec<_> {
+            logs.events()
+                .into_iter()
+                .filter(|line| line.target == TARGET)
+                .collect()
+        };
+        let told = tell_each("upstream");
+        let named = lines();
+        assert_eq!(named.len(), told, "{named:#?}");
+        for line in &named {
+            assert_eq!(
+                line.field("instance").as_deref(),
+                Some("upstream"),
+                "{line:?}"
+            );
+        }
+
+        let told = tell_each("");
+        let unnamed = lines().split_off(named.len());
+        assert_eq!(unnamed.len(), told, "{unnamed:#?}");
+        for line in &unnamed {
+            assert_eq!(line.field("instance"), None, "{line:?}");
+        }
     }
 }

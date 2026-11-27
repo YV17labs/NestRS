@@ -45,7 +45,8 @@ config's that the word list cannot know — `Lock` on Redis reads `redis__lock`,
 which a package binding Redis to its own lock port may declare — is refused as
 a shared namespace, and two markers reading one name are refused at first use.
 Every refusal names its instance's variables, and every line a connection
-files carries an `instance` field.
+files carries an `instance` field — a named instance's, the default's none
+(`resilience-policy.md`, 2026-11-27).
 
 **A module generic over an instance is written by hand.** `#[module]` submits a
 `static` descriptor, which cannot be generic, so it refuses a generic struct and

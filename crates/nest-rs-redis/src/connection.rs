@@ -1478,7 +1478,7 @@ mod tests {
                         .is_err()
                 );
                 let default = logs.expect_one(crate::TARGET, tls::PLAINTEXT_OPEN);
-                assert_eq!(default.field("instance").as_deref(), Some(""), "{url}");
+                assert_eq!(default.field("instance"), None, "{url}");
                 drop(logs);
 
                 let logs = nest_rs_testing::LogCapture::install();

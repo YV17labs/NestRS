@@ -1,6 +1,6 @@
 ---
 title: Upgrading to the unreleased changes
-description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver, a route's posture, an HTTP error's detail, a 503 tick's level — and what fails when a step is missed."
+description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver, a route's posture, an HTTP error's detail, a 503 tick's level, a default Redis instance's lines — and what fails when a step is missed."
 ---
 
 import { Steps } from '@astrojs/starlight/components';
@@ -10,8 +10,8 @@ published release's compatibility held back, whatever they break. An attribute
 on a GraphQL operation applies to the method you wrote, a `Problem` is the one thing an edge reads in a handler's error, a
 `SafeLink` names the type it says, a data driver says what each handle holds,
 only a route's decorator opens its reads, an HTTP reply's `detail` is a
-sentence written for the client, and a tick or listener failing with a `503`
-is filed at `warn`.
+sentence written for the client, a tick or listener failing with a `503`
+is filed at `warn`, and a Redis line of the default instance names none.
 This page is the order to take the changes in; the
 [changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/unreleased.md) says
 why each was made. The release holding them is numbered when it is cut, and
@@ -23,7 +23,8 @@ compile errors, so the compiler finds every site; a step that changes behaviour 
 boot, a log or the wire shows when one is missed. An app on SeaORM with no
 `SafeLink` of its own takes steps 1 to 3, then reads steps 6 to 8: step 6 is a
 compile error only where a route read through one of the types it names, and
-steps 7 and 8 change behaviour alone, so no compiler sends you back to them.
+steps 7 and 8 change behaviour alone, so no compiler sends you back to them; an
+app on Redis reads step 9 too, which changes behaviour alone.
 
 <Steps>
 
@@ -151,6 +152,12 @@ steps 7 and 8 change behaviour alone, so no compiler sends you back to them.
    behaviour alone: a log filter or an alert reading the old level or message
    reads the new pair.
 
+9. **Match the default Redis instance by its field's absence.** A line on
+   `nest_rs::redis` of the default instance carries no `instance`, where it
+   carried `instance = ""`; a named instance's still says it,
+   `instance = "cache"`. This step changes behaviour alone: a log filter, a
+   query or an alert matching `instance=""` matches a line with no `instance`.
+
 </Steps>
 
 ## What fails if you get it wrong
@@ -182,6 +189,8 @@ steps 7 and 8 change behaviour alone, so no compiler sends you back to them.
 - **An alert on `scheduled job failed` or `event listener failed` at `error`**
   stays silent while a dependency refuses with a `503`: those occurrences are
   filed at `warn`, under the `; unavailable` pair.
+- **A filter on `instance=""` over `nest_rs::redis`** matches nothing: the
+  default instance's lines carry no `instance`.
 
 ## Reference
 

@@ -1989,3 +1989,34 @@ values: the bounds an operator sets hold, then speed.
 - A call spawned onto a task of its own still takes nothing of the attempt.
   It waits for a slot of its own beside the attempt's, as the entry above
   named.
+
+## 2026-11-27 — the default instance's lines and series name no instance
+
+The entry "what the earlier entries left to settle" named it undone: the
+default instance's lines said `instance = ""` and its series
+`nestrs.resilience.instance=""`, a sentinel where no field would do. Every
+other optional field of these lines (`host`, `method`, `failed`, `manual`) is
+left out when it holds nothing, and the observability rule refuses a value
+that reads as one when it is none, as `actor_id` is never `""`. So a policy's
+lines on `nest_rs::resilience`, its counters and its observed reads carry
+`instance` only for a named instance, and the default's carry none —
+decided by correctness: a filter on `instance=""` matched an absence spelled
+as a value. Redis's lines on `nest_rs::redis`, the family's other member, take
+the same rule in the same change.
+
+What keeps `""`: `ResilienceError::Refused`'s `instance` and
+`ConfigNotResolvedError::instance`, the values a caller matches, which the
+entry naming a refusal's instance kept as a `&'static str` over
+`Option<&'static str>`; a value, unlike a field, has no absence to spell.
+
+**How a series leaves its attribute out**: its attributes are written led by
+the instance's and recorded as a slice cut past that lead for the default
+instance (`InstanceAttribute::led`), so a record allocates nothing. Refused:
+a `Vec` per record (an allocation on every count), and a match writing each
+record twice (two copies of every attribute list to keep in step).
+
+**Held by** `every_line_names_a_named_instance_and_the_default_s_name_none`
+(the teller's ten lines), `every_series_names_a_named_instance_and_the_default_s_name_none`
+(the four counters), `the_default_instance_s_reads_name_no_instance` (the five
+observed reads), and on Redis the plaintext-open, TLS-refusal and Cluster
+refusal line tests.

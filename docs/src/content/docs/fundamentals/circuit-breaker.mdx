@@ -169,8 +169,8 @@ was. Each moves this replica's breaker alone.
 ## What it files
 
 Each transition is a `warn` on `nest_rs::resilience`,
-`circuit breaker changed state`, naming the `instance` and the `state` it
-entered: `open`, `half_open` or `closed`. Failures opening it add `failed`,
+`circuit breaker changed state`, naming the `instance`, but for the default
+instance, and the `state` it entered: `open`, `half_open` or `closed`. Failures opening it add `failed`,
 `window`, `open_ms` and `error`: what the last of them failed on, the error's
 chain with every URL in it cut to its scheme, host and numeric port (see
 [what a line tells of a URL](/fundamentals/resilience-events/#what-a-line-tells-of-a-url)), or the timeout's sentence for an

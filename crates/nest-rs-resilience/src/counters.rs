@@ -41,11 +41,39 @@ pub(crate) const MANUAL_ATTRIBUTE: &str = "nestrs.resilience.breaker.manual";
 #[cfg(feature = "opentelemetry")]
 pub(crate) const REFUSAL_ATTRIBUTE: &str = "nestrs.resilience.refusal";
 
+/// The `nestrs.resilience.instance` a policy's series lead with: its
+/// marker's name, and no attribute at all for the default instance, whose
+/// name is empty, as its lines carry no `instance`.
+#[cfg(feature = "opentelemetry")]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct InstanceAttribute(Option<&'static str>);
+
+#[cfg(feature = "opentelemetry")]
+impl InstanceAttribute {
+    /// The attribute of the instance named `instance`.
+    pub(crate) const fn new(instance: &'static str) -> Self {
+        Self(crate::teller::named(instance))
+    }
+
+    /// The attribute a series' attributes lead with, given to
+    /// [`led`](Self::led).
+    pub(crate) fn lead(self) -> opentelemetry::KeyValue {
+        opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.0.unwrap_or_default())
+    }
+
+    /// `attributes`, led by [`lead`](Self::lead), as the series is recorded:
+    /// whole for a named instance, and without their lead for the default
+    /// one — sliced, so a record allocates nothing.
+    pub(crate) fn led(self, attributes: &[opentelemetry::KeyValue]) -> &[opentelemetry::KeyValue] {
+        &attributes[usize::from(self.0.is_none())..]
+    }
+}
+
 /// One policy's counters, by its instance.
 #[derive(Debug, Default)]
 pub(crate) struct Counters {
     #[cfg(feature = "opentelemetry")]
-    instance: &'static str,
+    instance: InstanceAttribute,
     #[cfg(feature = "opentelemetry")]
     transitions: Lazy,
     #[cfg(feature = "opentelemetry")]
@@ -79,7 +107,7 @@ impl Counters {
         let _ = instance;
         Self {
             #[cfg(feature = "opentelemetry")]
-            instance,
+            instance: InstanceAttribute::new(instance),
             ..Self::default()
         }
     }
@@ -98,17 +126,18 @@ impl Counters {
                 "The circuit breakers' transitions, by the state each entered, and whether it \
                  was manual.",
             );
+            let instance = self.instance;
             if manual {
                 counter.add(
                     1,
-                    &[
-                        self.instance(),
+                    instance.led(&[
+                        instance.lead(),
                         state,
                         KeyValue::new(MANUAL_ATTRIBUTE, true),
-                    ],
+                    ]),
                 );
             } else {
-                counter.add(1, &[self.instance(), state]);
+                counter.add(1, instance.led(&[instance.lead(), state]));
             }
         }
         #[cfg(not(feature = "opentelemetry"))]
@@ -123,7 +152,7 @@ impl Counters {
             "{retry}",
             "The calls the policies sent again.",
         )
-        .add(1, &[self.instance()]);
+        .add(1, self.instance.led(&[self.instance.lead()]));
     }
 
     pub(crate) fn refusal(&self, refusal: ResilienceRefusal) {
@@ -136,10 +165,10 @@ impl Counters {
         )
         .add(
             1,
-            &[
-                self.instance(),
+            self.instance.led(&[
+                self.instance.lead(),
                 opentelemetry::KeyValue::new(REFUSAL_ATTRIBUTE, refusal.as_str()),
-            ],
+            ]),
         );
         #[cfg(not(feature = "opentelemetry"))]
         let _ = refusal;
@@ -153,12 +182,7 @@ impl Counters {
             "{fallback}",
             "The runs a fallback answered in place of their error.",
         )
-        .add(1, &[self.instance()]);
-    }
-
-    #[cfg(feature = "opentelemetry")]
-    fn instance(&self) -> opentelemetry::KeyValue {
-        opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.instance)
+        .add(1, self.instance.led(&[self.instance.lead()]));
     }
 }
 
@@ -256,6 +280,70 @@ mod tests {
             reported(&exporter),
             [FALLBACKS, RETRIES],
             "seated, the retries first recorded before count from the next record"
+        );
+    }
+
+    /// Every series a named instance's counters record says it as
+    /// `nestrs.resilience.instance`; the default instance's, named by
+    /// nothing, carry no such attribute, as its lines carry no `instance`.
+    #[test]
+    fn every_series_names_a_named_instance_and_the_default_s_name_none() {
+        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        for instance in ["quotes", ""] {
+            let counters = Counters::new(instance);
+            counters.transition("open", false);
+            counters.transition("closed", true);
+            counters.retry();
+            counters.refusal(ResilienceRefusal::Full);
+            counters.fallback();
+        }
+        provider.force_flush().expect("the export");
+
+        let exported = exporter
+            .get_finished_metrics()
+            .expect("the exported metrics");
+        let mut series: Vec<(&str, Option<String>, u64)> = exported
+            .last()
+            .into_iter()
+            .flat_map(|export| export.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .flat_map(|metric| {
+                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                    panic!("a counter: {metric:?}");
+                };
+                sum.data_points()
+                    .map(|point| {
+                        let instance = point
+                            .attributes()
+                            .find(|kv| kv.key.as_str() == INSTANCE_ATTRIBUTE)
+                            .map(|kv| kv.value.to_string());
+                        (metric.name(), instance, point.value())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        series.sort();
+        let quotes = || Some("quotes".to_owned());
+        assert_eq!(
+            series,
+            [
+                (TRANSITIONS, None, 1),
+                (TRANSITIONS, None, 1),
+                (TRANSITIONS, quotes(), 1),
+                (TRANSITIONS, quotes(), 1),
+                (FALLBACKS, None, 1),
+                (FALLBACKS, quotes(), 1),
+                (REFUSALS, None, 1),
+                (REFUSALS, quotes(), 1),
+                (RETRIES, None, 1),
+                (RETRIES, quotes(), 1),
+            ]
         );
     }
 

@@ -64,8 +64,9 @@ What the policy holds now is read on it, each `None` for a mechanism that is off
 
 ## The lines
 
-Every line is on `nest_rs::resilience` and names the policy's `instance`, every
-duration in whole milliseconds rounded up. A line about a call adds the `host`
+Every line is on `nest_rs::resilience` and names the policy's `instance`, which
+the default instance's lines leave out, every duration in whole milliseconds
+rounded up. A line about a call adds the `host`
 and `method` of the decorated method that ran it, and neither when `run`,
 `run_idempotent` or the middleware did. A policy files ten lines:
 
@@ -168,7 +169,8 @@ error type of your own.
 Once telemetry exports, every policy counts its breaker's transitions, its
 retries, the refusals its runs end on and its fallbacks, and observes its reads
 as up-down counters: [the instruments](/opentelemetry/metrics/#resilience-policies)
-are listed there, each by the policy's `instance`.
+are listed there, each by the policy's instance, none on the default
+instance's.
 
 ## A line, an event and a counter each say their own fact
 

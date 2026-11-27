@@ -403,7 +403,9 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   and a run ending on a timeout file no line of their own, in any configuration. A refusal is
   counted and told as its attempt ends, before its savepoint settles: a run whose last
   attempt timed out and whose savepoint then cannot settle answers `Unsettled`, its
-  timeout told and counted all the same. Every duration a line files is in whole
+  timeout told and counted all the same. Each line names the policy's
+  `instance` and each series `nestrs.resilience.instance`, both left out for
+  the default instance, which names none. Every duration a line files is in whole
   milliseconds, rounded up. An event in code: `ResiliencePolicy::events()`
   opens a subscription to each retry, attempt given up at its bound, call
   refused unsent, transition and fallback as a `ResilienceEvent`, read with
@@ -499,6 +501,11 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
 
 ### Changed
 
+- **A Redis connection's lines of the default instance carry no `instance`**,
+  where they carried `instance = ""`: a field that holds nothing is left out,
+  as every other optional field of a line is, and a named instance's lines
+  still say it (`instance = "cache"`). **Breaking** for a log filter, query or
+  alert on `nest_rs::redis` matching `instance=""`: match the field's absence.
 - **`RedisModule::<Cache>` in `imports`, the turbofish the published release taught, is refused** at
   its `::`, naming the type to write. **Breaking:** write a module of a named
   instance as its type, `RedisModule<Cache>`.

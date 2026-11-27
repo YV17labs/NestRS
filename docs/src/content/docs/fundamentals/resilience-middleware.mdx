@@ -70,7 +70,7 @@ it, it refuses every request, unsent, with an error saying so.
 
 What it does is told as the policy's own: its [lines](/fundamentals/resilience-events/#the-lines)
 on `nest_rs::resilience`, its [events](/fundamentals/resilience-events/) and its counters. Each names the policy's
-`instance`, and none names a host or a method: a request the middleware runs
+`instance`, but the default instance's, and none names a host or a method: a request the middleware runs
 comes from no decorated method, so two clients sharing a policy are told apart
 by nothing it files. Give each client a policy of its own, one instance per
 dependency.

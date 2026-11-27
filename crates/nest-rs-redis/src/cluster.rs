@@ -579,15 +579,15 @@ mod tests {
         outcome: Result<T, redis::RedisError>,
         logs: &nest_rs_testing::LogCapture,
     ) {
-        refused_and_said_for(outcome, logs, "", "redis");
+        refused_and_said_for(outcome, logs, None, "redis");
     }
 
-    /// [`refused_and_said`] for the instance `name`, whose variables sit under
-    /// `namespace`.
+    /// [`refused_and_said`] for the instance `name`, none for the default
+    /// one, whose variables sit under `namespace`.
     fn refused_and_said_for<T>(
         outcome: Result<T, redis::RedisError>,
         logs: &nest_rs_testing::LogCapture,
-        name: &str,
+        name: Option<&str>,
         namespace: &str,
     ) {
         let Err(refused) = outcome else {
@@ -596,7 +596,7 @@ mod tests {
         assert!(ClientTls::negotiation_failed(&refused), "{refused}");
         let said = logs.find(crate::TARGET, REFUSED);
         assert_eq!(said.len(), 1, "{:#?}", logs.events());
-        assert_eq!(said[0].field("instance").as_deref(), Some(name));
+        assert_eq!(said[0].field("instance").as_deref(), name);
         assert!(
             said[0].field("reason").is_some_and(|reason| {
                 reason.contains("requires a client certificate")
@@ -660,7 +660,7 @@ mod tests {
         refused_and_said_for(
             a_refusing_node_opened_for::<Cache>().await,
             &logs,
-            "cache",
+            Some("cache"),
             "redis__cache",
         );
     }

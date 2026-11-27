@@ -31,7 +31,7 @@ request.
 | WebSocket events | `nest_rs::ws` | `info` |
 | GraphQL execution and subscriptions | `nest_rs::graphql` | `info` |
 | Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |
-| Redis connection (the `RedisConnection` the queue, the worker, the rate-limit store and the schedule's lock share, one per instance, each line carrying its `instance`) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
+| Redis connection (the `RedisConnection` the queue, the worker, the rate-limit store and the schedule's lock share, one per instance, each line carrying its `instance`, the default instance's none) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
 | Module registration | `nest_rs::module` | `info` |
 | Lifecycle hooks (`#[hooks]`) | `nest_rs::lifecycle` | `error` for a hook that failed or panicked, `warn` for one abandoned at the budget |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) | `info` |

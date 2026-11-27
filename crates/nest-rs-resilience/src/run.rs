@@ -22,7 +22,7 @@ use nest_rs_database::AtomicError;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::DropGuard;
 
-use crate::attempting::{Attempting, Lent, Owed, SharedSlot, SharedTurn, Taken};
+use crate::attempting::{Attempting, Lent, Owed, SharedPass, SharedSent, SharedSlot, Taken};
 use crate::breaker::{Breaker, Cut, Failure, Pass, Sent};
 use crate::bulkhead::{Full, Slot};
 use crate::call::{Calling, Erased, Judged, Placing, Reads};
@@ -195,23 +195,22 @@ pin_project_lite::pin_project! {
     /// An attempt that found no token of the rate free, waiting for the one
     /// it reserved, then let through again as [`Terms::admit`] says. Dropped
     /// before then — its run dropped, its breaker refusing it or its unit out
-    /// of time once the wait ends — it gives the token to the attempt behind.
+    /// of time once the wait ends — it gives the token to the attempt behind,
+    /// and the turn it shares back to the attempt it is made in, unsent.
     struct Admitted<'p> {
         terms: Terms<'p>,
         // `reserved` before `pass`: given back first, so the call a probe's turn
         // is handed to finds the token this one left.
         reserved: Option<Reservation<'p>>,
         pass: Option<Pass<'p>>,
-        // The epoch the turn the call shares was let through in, when it shares
-        // the turn of the attempt it is made in.
-        shares: Option<u64>,
+        turn: Option<SharedPass>,
         #[pin]
         due: Sleep,
     }
 }
 
 impl<'p> Future for Admitted<'p> {
-    type Output = Result<(Option<Pass<'p>>, Bound), ResilienceRefusal>;
+    type Output = Result<(Option<Pass<'p>>, Option<SharedPass>, Bound), ResilienceRefusal>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -228,11 +227,11 @@ impl<'p> Future for Admitted<'p> {
                 }
             }
             ready!(this.due.as_mut().poll(cx));
-            match this
-                .terms
-                .admit(this.pass, this.reserved, *this.shares, false)
-            {
-                Admission::Through(pass, bound) => return Poll::Ready(Ok((pass, bound))),
+            let shares = this.turn.as_ref().map(SharedPass::epoch);
+            match this.terms.admit(this.pass, this.reserved, shares, false) {
+                Admission::Through(pass, bound) => {
+                    return Poll::Ready(Ok((pass, this.turn.take(), bound)));
+                }
                 Admission::Refused(refusal) => return Poll::Ready(Err(refusal)),
                 Admission::Postponed(at) => this.due.as_mut().reset(at),
             }
@@ -338,7 +337,7 @@ enum Attempt<'p> {
     /// Sent on the turn of the attempt it is made in, a call of that
     /// attempt's policy: its failure is that attempt's once the run ends on
     /// it, and one the run sends again past is owed until then.
-    Shared(SharedTurn),
+    Shared(SharedSent),
 }
 
 /// A success left in the breaker, settled as it was judged once dropped.
@@ -645,26 +644,19 @@ impl<'p> Run<'p> {
             } else {
                 Taken::NOTHING
             };
-            let shares = turn.as_ref().map(SharedTurn::epoch);
+            let shares = turn.as_ref().map(SharedPass::epoch);
             let (mut pass, mut reserved) = (None, None);
-            let admitted = self.terms.admit(&mut pass, &mut reserved, shares, token);
-            if let Some(turn) = turn {
-                *self.as_mut().project().attempt = Some(Attempt::Shared(turn));
-            }
-            match admitted {
-                Admission::Through(pass, bound) => self.as_mut().send(pass, bound),
-                Admission::Refused(refusal) => {
-                    // A turn shared and not sent on goes back at once.
-                    *self.as_mut().project().attempt = None;
-                    return Poll::Ready(Ended::Refused(refusal));
-                }
+            match self.terms.admit(&mut pass, &mut reserved, shares, token) {
+                Admission::Through(pass, bound) => self.as_mut().send(pass, turn, bound),
+                // A turn shared and not sent on goes back at once.
+                Admission::Refused(refusal) => return Poll::Ready(Ended::Refused(refusal)),
                 Admission::Postponed(at) => {
                     let mut this = self.as_mut().project();
                     let admitted = Box::pin(Admitted {
                         terms: *this.terms,
                         reserved,
                         pass,
-                        shares,
+                        turn,
                         due: tokio::time::sleep_until(at),
                     });
                     this.wait.set(Wait::Admitting { admitted });
@@ -681,11 +673,8 @@ impl<'p> Run<'p> {
             this.wait.set(Wait::within());
             *this.stage = Stage::Arriving;
             match admitted {
-                Ok((pass, bound)) => self.as_mut().send(pass, bound),
-                Err(refusal) => {
-                    *self.as_mut().project().attempt = None;
-                    return Poll::Ready(Ended::Refused(refusal));
-                }
+                Ok((pass, turn, bound)) => self.as_mut().send(pass, turn, bound),
+                Err(refusal) => return Poll::Ready(Ended::Refused(refusal)),
             }
         }
         let this = self.as_mut().project();
@@ -709,18 +698,22 @@ impl<'p> Run<'p> {
     }
 
     /// The attempt let through with `pass`, its outcome in the breaker, or on
-    /// the turn it shares, under `bound`: its call is made at its first poll,
+    /// the `turn` it shares, under `bound`: its call is made at its first poll,
     /// inside the bound, so one panicking before it hands back its future
     /// fails the attempt as a panic while it runs does. A retry counts on the
     /// retries' counter.
-    fn send(self: Pin<&mut Self>, pass: Option<Pass<'p>>, bound: Bound) {
+    fn send(self: Pin<&mut Self>, pass: Option<Pass<'p>>, turn: Option<SharedPass>, bound: Bound) {
         let this = self.project();
         if *this.resent > 0 {
             this.terms.policy.teller.resent();
         }
-        if let Some(pass) = pass {
-            *this.attempt = Some(Attempt::Sent(pass.send(bound.wait, bound.until)));
-        }
+        // A turn the breaker moved away from since goes back unsent, the call
+        // let through on a pass of its own.
+        *this.attempt = match (pass, turn) {
+            (Some(pass), _) => Some(Attempt::Sent(pass.send(bound.wait, bound.until))),
+            (None, Some(turn)) => Some(Attempt::Shared(turn.send())),
+            (None, None) => None,
+        };
         let turn = match this.attempt {
             Some(Attempt::Sent(sent)) => Some(sent.epoch()),
             Some(Attempt::Shared(turn)) => Some(turn.epoch()),
@@ -6966,6 +6959,64 @@ mod tests {
                 [Some(TIMED_OUT.to_owned())],
                 "idempotent: {idempotent}, probe: {probe}"
             );
+        }
+    }
+
+    /// A call sharing its attempt's turn that the timeout of a policy between
+    /// them cuts while it waits for its token was never sent: it counts
+    /// nothing in that attempt, as the same call made in no attempt counts
+    /// nothing in its breaker. An attempt answering `Ok`, whose every call
+    /// sent answered, keeps a breaker one failure opens closed, and a probe of
+    /// that shape closes it.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_sharing_its_attempts_turn_cut_waiting_for_its_token_counts_nothing_there() {
+        let short = Duration::from_millis(100);
+        let between = ResiliencePolicy::<Between>::new(&ResilienceConfig {
+            timeout: short,
+            retries: None,
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        })
+        .expect("a valid policy");
+        let answers = || async { Ok::<_, Refused>(()) };
+        for (idempotent, probe) in [(false, false), (true, false), (false, true), (true, true)] {
+            let partner = policy(ResilienceConfig {
+                retries: Some(1),
+                rate_limit: Some(1),
+                rate_window: Duration::from_secs(1),
+                rate_wait: Some(Duration::from_secs(5)),
+                ..probing(Duration::from_secs(10))
+            });
+            if probe {
+                probe_due(&partner).await;
+            }
+            let answered = partner
+                .run(|| async {
+                    let first = partner.run(answers).await;
+                    assert!(
+                        first.is_ok(),
+                        "the first took the attempt's token: {first:?}"
+                    );
+                    let cut = between
+                        .run(|| async {
+                            if idempotent {
+                                partner.run_idempotent(answers).await
+                            } else {
+                                partner.run(answers).await
+                            }
+                        })
+                        .await;
+                    assert!(timed_out_at(&cut, short), "{cut:?}");
+                    Ok::<_, Refused>(())
+                })
+                .await;
+            assert!(answered.is_ok(), "the attempt answered: {answered:?}");
+            assert_eq!(
+                partner.breaker_state(),
+                Some(BreakerState::Closed),
+                "idempotent: {idempotent}, probe: {probe}"
+            );
+            tokio::time::advance(Duration::from_secs(1)).await;
         }
     }
 

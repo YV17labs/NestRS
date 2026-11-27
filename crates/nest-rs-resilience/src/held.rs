@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use std::borrow::Cow;
 
-use crate::attempting::{SharedSlot, SharedTurn};
+use crate::attempting::{SharedSent, SharedSlot};
 use crate::breaker::{Failure, HeldAttempt, Unwound};
 use crate::bulkhead::HeldSlot;
 use crate::error::{PANICKED, ResilienceError, ResilienceRefusal, TIMED_OUT};
@@ -32,7 +32,7 @@ pub(crate) struct Held {
 /// of the attempt it was made in, whose failure the answer's is.
 pub(crate) enum Attempt {
     Own(HeldAttempt),
-    Shared(SharedTurn),
+    Shared(SharedSent),
 }
 
 /// The slot a held answer holds: the run's own, or the one it shares of the

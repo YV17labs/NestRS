@@ -124,18 +124,52 @@ impl Drop for SharedSlot {
 }
 
 /// The turn of the breaker of the attempt named `name` a call shares, let
-/// through in `epoch`, given back as it ends with what it failed on, or as it
-/// is dropped: with a timeout inside a [`Cut`], with nothing elsewhere.
-#[must_use = "a shared turn is given back as it ends"]
-pub(crate) struct SharedTurn {
+/// through in `epoch`, its call not sent yet. Dropped so — refused, cut while
+/// it waits for its token, its caller gone — it gives the turn back counting
+/// nothing, as a [`Pass`](crate::breaker::Pass) of its own does.
+#[must_use = "a shared turn is given back as it is dropped"]
+pub(crate) struct SharedPass {
     name: NonZeroU64,
     epoch: u64,
 }
 
-impl SharedTurn {
+impl SharedPass {
     /// The epoch of the breaker the attempt was let through in: once the
     /// breaker opened or was switched by hand since, the turn is no longer
     /// one a call is sent on.
+    #[inline]
+    pub(crate) const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// The call sent on the turn: from now on its outcome is the attempt's.
+    pub(crate) fn send(self) -> SharedSent {
+        let sent = SharedSent {
+            name: self.name,
+            epoch: self.epoch,
+        };
+        std::mem::forget(self);
+        sent
+    }
+}
+
+impl Drop for SharedPass {
+    fn drop(&mut self) {
+        give_back(self.name, self.epoch, None);
+    }
+}
+
+/// The turn of the breaker of the attempt named `name` a call was sent on,
+/// let through in `epoch`, given back as it ends with what it failed on, or as
+/// it is dropped: with a timeout inside a [`Cut`], with nothing elsewhere.
+#[must_use = "a shared turn is given back as it ends"]
+pub(crate) struct SharedSent {
+    name: NonZeroU64,
+    epoch: u64,
+}
+
+impl SharedSent {
+    /// The epoch of the breaker the attempt was let through in.
     #[inline]
     pub(crate) const fn epoch(&self) -> u64 {
         self.epoch
@@ -146,22 +180,16 @@ impl SharedTurn {
     pub(crate) fn ended(self, failed: Option<Cow<'static, str>>) {
         let (name, epoch) = (self.name, self.epoch);
         std::mem::forget(self);
-        ATTEMPTING.with(|attempting| {
-            attempting.named(name, |lent| {
-                lent.turn = Some(epoch);
-                if let Some(failed) = failed {
-                    lent.met().failed.get_or_insert(failed);
-                }
-            });
-        });
+        give_back(name, epoch, failed);
     }
 
     /// The call sharing the turn failed on `failed` in an attempt it sends
     /// again: the turn goes back to share, and the failure is owed to the
     /// attempt, its own only should the call end on it.
     pub(crate) fn owing(self, failed: Cow<'static, str>) -> Owed {
-        let name = self.name;
-        drop(self);
+        let (name, epoch) = (self.name, self.epoch);
+        std::mem::forget(self);
+        give_back(name, epoch, None);
         Owed {
             name,
             failed: Some(failed),
@@ -169,21 +197,26 @@ impl SharedTurn {
     }
 }
 
-impl Drop for SharedTurn {
+impl Drop for SharedSent {
     fn drop(&mut self) {
-        let epoch = self.epoch;
         // Dropped by the timeout of a policy between, the call has timed out,
         // as an attempt of its own in flight there would have (`Sent`).
-        let cut = Cut::encloses();
-        ATTEMPTING.with(|attempting| {
-            attempting.named(self.name, |lent| {
-                lent.turn = Some(epoch);
-                if cut {
-                    lent.met().failed.get_or_insert(Cow::Borrowed(TIMED_OUT));
-                }
-            })
-        });
+        let failed = Cut::encloses().then_some(Cow::Borrowed(TIMED_OUT));
+        give_back(self.name, self.epoch, failed);
     }
+}
+
+/// The turn of the attempt named `name`, let through in `epoch`, given back
+/// to share, the attempt failing on `failed` unless it already failed.
+fn give_back(name: NonZeroU64, epoch: u64, failed: Option<Cow<'static, str>>) {
+    ATTEMPTING.with(|attempting| {
+        attempting.named(name, |lent| {
+            lent.turn = Some(epoch);
+            if let Some(failed) = failed {
+                lent.met().failed.get_or_insert(failed);
+            }
+        });
+    });
 }
 
 /// What a call sharing the turn of the attempt named `name` failed on in an
@@ -220,7 +253,7 @@ impl Drop for Owed {
 /// attempt's turn of the breaker, when free, and its token of the rate, when
 /// no call took it yet.
 pub(crate) struct Taken {
-    pub(crate) turn: Option<SharedTurn>,
+    pub(crate) turn: Option<SharedPass>,
     pub(crate) token: bool,
 }
 
@@ -459,7 +492,7 @@ impl Attempting {
         ATTEMPTING
             .with(|attempting| {
                 attempting.innermost(pointer, |lent| Taken {
-                    turn: lent.turn.take().map(|epoch| SharedTurn {
+                    turn: lent.turn.take().map(|epoch| SharedPass {
                         name: lent.name(),
                         epoch,
                     }),

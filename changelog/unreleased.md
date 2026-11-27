@@ -381,8 +381,9 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   and no retry starts past that deadline. An attempt its caller drops counts in
   neither direction; under a unit's deadline, one dropped past its bound has its
   call read once more as it is dropped, counting as its answer when that came in
-  time and as a timeout otherwise, and one another policy's timeout cuts counts as
-  a timeout in a unit or outside one.
+  time and as a timeout otherwise, and one another policy's timeout cuts once sent
+  counts as a timeout in a unit or outside one, in its own breaker or in the
+  attempt whose turn it shares; one cut still waiting for its token counts nothing.
   A call's own error answers as its `ToProblem` says or, where it is none, by the
   `Problem` its chain carries, opaquely where it carries none, and a `Retry-After`
   the error's chain carries holds its retry back.

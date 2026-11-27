@@ -2161,3 +2161,32 @@ once): `run` bare 46.6 → 45.7 ns, breaker 59.5 → 59.9, bulkhead 56.2 → 53.
 rate 66.8 → 67.1; `run_idempotent` bare 44.8 → 46.0, breaker 58.6 → 60.0,
 bulkhead 55.2 → 54.1, rate 67.6 → 68.9. `run_idempotent` costs about 1.3 ns,
 3 %, on three of four policies; `run` moves within the spread.
+
+## 2026-11-27 — a shared turn counts a cut only once its call was sent
+
+A call sharing its attempt's turn of the breaker took the turn as it arrived
+and held it in the run's `attempt` while it waited for its token of the rate.
+Dropped there by the timeout of a policy between, the turn recorded a timeout
+as the attempt's failure, the call never sent: a method answering `Ok`, every
+call it sent answered, opened a breaker of one failure, and a probe so shaped
+opened it again. The same call made in no attempt waits on a `Pass`, whose drop
+counts nothing.
+
+- **The shared turn has two types, as the breaker's attempt does**
+  (`attempting::SharedPass`, `attempting::SharedSent`, in place of
+  `SharedTurn`). `Attempting::take` hands a `SharedPass`; the run holds it in
+  `Admitted` while it waits for its token, and `Run::send` turns it into the
+  `SharedSent` `Attempt::Shared` holds. A pass dropped gives the turn back
+  counting nothing; a sent turn dropped inside a `Cut` records the timeout, as
+  `Sent` does. A `sent` flag `Drop` reads, the other way the finding offered,
+  was refused: the type says which drop counts, as `Pass`/`Sent` do, and no
+  state can claim a send that did not happen. Correctness decided it.
+
+Held by run.rs's
+`a_call_sharing_its_attempts_turn_cut_waiting_for_its_token_counts_nothing_there`
+(sent once or again, closed or probing: the breaker stays closed) beside
+`a_call_sharing_its_attempts_turn_cut_by_a_policy_between_has_timed_out_there`.
+Measured in `benches/policy.rs`, A/B on one container: `run` bare 44.8 → 45.5
+ns, breaker 58.3 → 56.2, bulkhead 53.1 → 53.2, rate 65.4 → 65.3;
+`run_idempotent` bare 45.5 → 45.7, breaker 59.3 → 57.2, bulkhead 54.0 → 54.9,
+rate 67.1 → 66.2: within the spread, no gain claimed.

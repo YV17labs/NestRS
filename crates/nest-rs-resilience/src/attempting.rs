@@ -1,15 +1,56 @@
 //! [`Attempting`] — the policies whose attempt this thread is polling now, and
-//! what each attempt shares: a run opened inside one of them, directly or
-//! through a call of another policy, is a call of that policy made by that
-//! attempt. The attempt keeps its slot of the bulkhead and its turn of the
-//! breaker until it answers, and shares each with one such call at a time,
-//! which gives it back as it ends; the first call let through takes its token
-//! of the rate. A call sharing its turn counts in the attempt's outcome, once,
-//! as it ends — failed only when it ends on a failure, not on one it sends
-//! again past — and shares it only while the breaker is in the epoch the
-//! attempt was let through in. A call made in an attempt its policy may still
-//! send again is sent once, decided as the call opens: an attempt that then
-//! ends without being sent again leaves it sent once.
+//! what each attempt shares with the calls of its policy it makes: the rule
+//! stated whole, which the docs copy once (`fundamentals/failures-and-fallbacks`,
+//! *A call inside an attempt of its own policy*) and every other page links.
+//!
+//! **Who.** A run opened while its thread polls an attempt of its own policy —
+//! a decorated method or a `run` calling another of that policy, directly or
+//! through a call under another policy, a request a client under that policy's
+//! middleware sends there, a call a middleware below it makes inside a
+//! request's attempt — is a call that attempt makes, of the innermost such
+//! attempt. A call on a task the attempt spawned is a call of its own.
+//!
+//! - **Slot.** The attempt keeps its slot of the bulkhead until it answers and
+//!   shares it with one call at a time ([`SharedSlot`]), which gives it back as
+//!   it ends, a response's body as that body ends; a call sharing it lends it
+//!   on, so a call three runs deep takes no slot either. A call made while it
+//!   is shared takes a free slot of its own, or waits within the bulkhead's own
+//!   wait for one or for the attempt's to come back, woken as it does, and
+//!   with no wait is refused `Full` at once.
+//! - **Turn.** A call let through while the attempt's turn of the breaker is
+//!   free shares it, a probe's included, and asks the breaker nothing while
+//!   the breaker is in the epoch the attempt was let through in, checked again
+//!   after a wait for its token; once the breaker opened, was switched by hand
+//!   or had an overdue probe's turn taken, the call meets it as any call does.
+//!   A call made while another shares the turn meets the breaker on its own:
+//!   refused `Open` beside a probe, counting its own outcome while it is
+//!   closed. The turn goes back before the slot, so a call that waited for the
+//!   attempt's slot takes its turn too.
+//! - **Token.** The first call sent goes out on the attempt's token of the
+//!   rate, and every later one takes its own. A call refused unsent gives back
+//!   the turn ([`SharedPass`]) and spends no token
+//!   ([`spend_token`](Attempting::spend_token)).
+//! - **Retries.** Inside an attempt its policy may still send again — its run
+//!   idempotent with retries left, or a run of the policy around it so — an
+//!   idempotent call is sent once, decided as it opens: an attempt that then
+//!   ends without being sent again leaves it sent once. Inside one never sent
+//!   again — a run once, a last attempt, a request its transport cannot send
+//!   again — it keeps its own retries, which nothing around it multiplies.
+//! - **Counting.** The attempt counts once in the breaker: a failure when its
+//!   own answer fails or a call sharing its turn ended on a failure, the first
+//!   one kept, and otherwise as its own answer is judged. A failure the call
+//!   is sent again past is [owed](Owed): forgiven when a later attempt answers,
+//!   replaced by a later failure, the attempt's should the call end on it — its
+//!   retry given up or refused unsent, the call cut. A call sharing the turn
+//!   that a policy between cuts once sent has timed out in the attempt
+//!   ([`SharedSent`]); one cut before it is sent, waiting for its token, or
+//!   dropped by its caller counts nothing; a panic is a failure; an answer
+//!   counted in neither direction fails nothing. Each call is sent under its
+//!   own timeout.
+//! - **Past the attempt.** What a call holds once the attempt it shares with
+//!   has answered — a response handed out of a `run`, its body read
+//!   afterwards — is shared with nothing: its slot was freed with the
+//!   attempt's, and its failure counts nowhere.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -41,7 +82,7 @@ pub(crate) struct Lent {
     /// The epoch of the breaker its turn was let through in, while that turn
     /// is free to share.
     turn: Option<u64>,
-    /// Whether its token of the rate is still to take.
+    /// Whether its token of the rate is still to take: no call sent on it.
     token: bool,
     /// What only a failure or a wait for its slot brings, out of line so a
     /// run reserves no room for it.
@@ -249,9 +290,9 @@ impl Drop for Owed {
     }
 }
 
-/// What a call takes of the attempt it is made in as it is let through: that
-/// attempt's turn of the breaker, when free, and its token of the rate, when
-/// no call took it yet.
+/// What a call takes of the attempt it is made in as it arrives: that
+/// attempt's turn of the breaker, when free, and whether it may be sent on
+/// that attempt's token of the rate, which no call sent took yet.
 pub(crate) struct Taken {
     pub(crate) turn: Option<SharedPass>,
     pub(crate) token: bool,
@@ -483,10 +524,12 @@ impl Attempting {
         });
     }
 
-    /// What a call let through takes of the innermost attempt of `policy` the
+    /// What a call arriving takes of the innermost attempt of `policy` the
     /// thread polls: its turn of the breaker, when no call shares it now —
     /// sent on only while the breaker is in the turn's epoch — and its token
-    /// of the rate, when no call took it.
+    /// of the rate, when no call took it, [spent](Self::spend_token) only once
+    /// the call is sent; a call refused unsent gives the turn back
+    /// ([`SharedPass`]).
     pub(crate) fn take(policy: &Mechanisms) -> Taken {
         let pointer: *const Mechanisms = policy;
         ATTEMPTING
@@ -496,9 +539,20 @@ impl Attempting {
                         name: lent.name(),
                         epoch,
                     }),
-                    token: std::mem::take(&mut lent.token),
+                    token: lent.token,
                 })
             })
             .unwrap_or(Taken::NOTHING)
+    }
+
+    /// The token of the innermost attempt of `policy` the thread polls spent
+    /// by the call sent now, when it was still to take: a call refused unsent
+    /// spends none, and the next call sent takes it.
+    #[cold]
+    pub(crate) fn spend_token(policy: &Mechanisms) {
+        let pointer: *const Mechanisms = policy;
+        ATTEMPTING.with(|attempting| {
+            attempting.innermost(pointer, |lent| lent.token = false);
+        });
     }
 }

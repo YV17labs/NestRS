@@ -96,6 +96,12 @@ use crate::run::{Run, Running};
 /// quotes otherwise is the error's to keep out, a URL holding one of those
 /// four unencoded included, which is read as ending there.
 ///
+/// A call made inside an attempt of its own policy is a call that attempt
+/// makes, sharing what the attempt holds and counting in it as [a call inside
+/// an attempt of its own
+/// policy](https://nestrs.dev/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy)
+/// does.
+///
 /// The breaker's state is read through [`breaker_state`](Self::breaker_state),
 /// and switched by hand — an operator taking a dependency out for its
 /// maintenance window — through [`open_breaker`](Self::open_breaker) and

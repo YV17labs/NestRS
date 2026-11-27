@@ -2192,3 +2192,92 @@ Measured in `benches/policy.rs`, A/B on one container: `run` bare 44.8 → 45.5
 ns, breaker 58.3 → 56.2, bulkhead 53.1 → 53.2, rate 65.4 → 65.3;
 `run_idempotent` bare 45.5 → 45.7, breaker 59.3 → 57.2, bulkhead 54.0 → 54.9,
 rate 67.1 → 66.2: within the spread, no gain claimed.
+
+## 2026-11-27 — a call inside an attempt of its own policy: one rule, one statement
+
+Twelve review rounds found drift in this rule because it was written out in
+full in nine places — `ResilienceMiddleware`'s rustdoc, `Run::poll_open`,
+`Run::poll_attempt`, `Terms::admit`, four docs pages and the changelog — each
+edited by the round that touched it. It now has one statement in rustdoc,
+`src/attempting.rs`'s module doc, and one on the docs site, *A call inside an
+attempt of its own policy* on `fundamentals/failures-and-fallbacks.mdx`; every
+other page, the changelog, the NestJS correspondence and the public rustdoc say
+it in one sentence and link there. Elegance decided it: one thing, one place to
+be found, and a branch changed in one place is changed everywhere it is read.
+
+Every branch, what happens, and the test that holds it (`run.rs` unless
+named; *new* marks a test this entry added, each seen failing under the
+mutation it guards but the two that pin a boundary):
+
+| Situation | What happens | Held by |
+|---|---|---|
+| A run opened while its thread polls an attempt of its policy, directly or through a call under another | a call of the innermost such attempt | `the_first_call_nested_in_an_attempt_of_its_own_policy_counts_for_it`; `resilient/expansion/body.rs` `a_method_calling_another_of_its_own_policy_hands_it_its_attempts_turn` |
+| A call on a task the attempt spawned | its own: its own slot, its own outcome | `a_call_spawned_from_an_attempt_is_a_call_of_its_own` (*new*, pins the boundary) |
+| The attempt's slot free to share | shared, no second slot; lent on, so three deep takes none | the walled-in case of the first test; `a_call_three_deep_shares_the_slot_its_attempt_shares` |
+| The attempt's body after the call, and its retries | still inside its slot | `an_attempt_holds_its_slot_past_a_call_of_its_policy_it_made`; `a_run_holds_its_slot_through_its_retries_once_a_call_of_its_policy_shared_it` |
+| The slot shared out, no wait | refused `Full` at once | `a_call_made_while_another_shares_its_attempts_slot_is_refused_full_with_no_wait` |
+| The slot shared out, a wait | a free slot of its own, or the attempt's back, woken as it comes | `calls_waiting_for_their_attempts_slot_are_woken_as_it_comes_back`; `calls_fanned_out_in_an_attempt_of_their_own_policy_each_meet_its_terms` |
+| The turn free, the breaker in the attempt's epoch, closed or probing, after a wait for a token too | shared, the breaker asked nothing | the first test's probe; `a_call_that_waited_for_its_token_shares_its_probes_turn` |
+| The epoch moved: opened beside, opened by hand, on a probe, closed by hand | the turn back unsent, the breaker met as it stands | `a_call_sharing_its_attempts_turn_is_refused_once_the_breaker_opened_beside_it` |
+| The turn shared out | the breaker met on its own: `Open` beside a probe, its own outcome while closed | the first test's fan-out; `calls_fanned_out_…` counting `(4, 4)` |
+| A call that waited for the attempt's slot | takes the turn too, given back before the slot | `a_page_that_waited_for_the_attempts_slot_counts_in_the_attempt` |
+| Refused unsent holding the turn | the turn back | `a_call_refused_unsent_on_a_probes_turn_gives_the_turn_back` |
+| Refused unsent, the attempt's token still to take | no token spent; the next call sent goes out on it | `a_call_refused_unsent_spends_no_token_of_its_attempt` (*new*, fixed) |
+| The first call let through, and every later one | the attempt's token, then its own | the walled-in case; `calls_fanned_out_…` |
+| An idempotent call in an attempt still to be sent again, three deep too | sent once | `an_idempotent_call_nested_in_an_attempt_never_sent_again_is_sent_again` |
+| … whose attempt then is not sent again | sent once (the limit named below) | `a_nested_idempotent_call_is_sent_once_whatever_its_attempt_then_does` |
+| … in a run once or a last attempt | its own retries | the same test; `middleware.rs` `a_request_sent_inside_an_attempt_never_sent_again_is_sent_again` |
+| … in a request the middleware cannot send again | its own retries | `middleware.rs` `a_call_made_inside_a_request_never_sent_again_keeps_its_retries` (*new*, fixed) |
+| A call sharing the turn ending on a failure; the attempt's own failure after a call that answered | the attempt fails, once | `an_attempt_whose_call_of_its_policy_succeeded_counts_its_own_failure`; the walled-in case `(1, 1)` |
+| A failure sent again past, then answered, once or twice, or after a timeout | forgiven | `a_nested_call_answering_on_its_retry_fails_no_attempt_around_it`, `…_on_its_second_retry_…`, `…_after_a_timeout_…` |
+| A failure sent again past, the retry then given up | the attempt's failure | the past-ceiling case of `a_nested_call_answering_on_its_retry_…` |
+| Cut by a policy between once sent | timed out in the attempt | `a_call_sharing_its_attempts_turn_cut_by_a_policy_between_has_timed_out_there` |
+| Cut by a policy between waiting for its token | nothing | `a_call_sharing_its_attempts_turn_cut_waiting_for_its_token_counts_nothing_there` |
+| Dropped by its caller before its bound | nothing | `a_call_sharing_its_attempts_turn_dropped_by_its_caller_counts_nothing_there` (*new*) |
+| A panic in a call sharing the turn | the attempt fails | `a_call_sharing_its_attempts_turn_that_panics_fails_the_attempt` (*new*) |
+| An `Err` its `record_if` refuses | nothing | `a_call_sharing_its_attempts_turn_answering_an_err_record_if_refuses_fails_nothing` (*new*) |
+| Three deep, the failure swallowed between | the outermost attempt fails once; a probe so shaped opens again | `a_call_three_deep_fails_the_attempt_its_attempt_shares_once` (*new*) |
+| A nested request counted | once, by the attempt | `middleware.rs` `a_request_sent_inside_an_attempt_of_its_own_policy_is_counted_once_by_that_attempt` |
+| A nested body held unread, read whole, cut short | keeps the slot; gives it back at its end; fails the attempt | `middleware.rs` `a_body_held_unread_…_keeps_its_slot`, `a_body_read_inside_…_gives_its_slot_back_as_it_ends`, `a_body_cut_short_inside_…_fails_that_attempt` |
+| A body read after its attempt answered | nothing of the policy (the limit named below) | `middleware.rs` `a_body_read_after_its_attempt_answered_holds_nothing_of_the_policy` (*new*, pins the boundary) |
+
+Two branches were wrong, each reproduced first:
+
+- **A call refused unsent spent the attempt's token.** `Attempting::take`
+  cleared the token as the call arrived, so a push refused `Open` beside a
+  manual opening spent it, and the push sent once the breaker was closed by
+  hand was refused `Limited` under a rate of one: one send charged twice. The
+  token is now read as the call arrives and spent as it is sent
+  (`Attempting::spend_token`, from `Run::send`), as a turn refused unsent goes
+  back. Correctness decided it: nothing sent counts nothing, the rate
+  included. Giving the token back in the refusal arm, the first way built,
+  measured up to 2.6 % on `run_idempotent` with a rate; taking the whole nested admission out of line cost 4–8 % on
+  `run`, an inlining cliff, and was discarded.
+- **A call made inside a request the middleware never sends again was sent
+  once.** The middleware's run reads `idempotent` as true, so an attempt it
+  could not send again — a request no method or key declares idempotent, a
+  body it cannot copy — still told the thread it might be, and a call of the
+  policy a middleware below it made there had its retries zeroed. The
+  middleware now marks that attempt its run's last (`Run::last`), so the call
+  keeps its retries, as inside a run once. Correctness decided it, one rule
+  for every attempt never sent again.
+
+Measured in `benches/policy.rs`, A/B on one container, a warm-up run after each
+build (the first run after a build read 30–40 % slow on either tree), a call
+answering at once: `run` bare 45.8 → 46.2 ns, breaker 56.6 → 57.5, bulkhead
+53.9 → 54.2, rate 65.4 → 66.9; `run_idempotent` bare 46.2 → 46.3, breaker 56.7
+→ 57.2, bulkhead 55.3 → 54.6, rate 66.0 → 66.4: within 1.5 %, no gain claimed.
+
+**Not done, named:**
+- A call outliving the attempt it shares with — a response handed out of a
+  `run`, its body read afterwards — holds nothing of the policy: its slot was
+  freed with the attempt's and its body's failure counts nowhere. Closing it
+  takes handing the attempt's slot and an outcome of its own to what still
+  holds the shared ones as the attempt answers; the run's slot borrows its
+  bulkhead for the run's lifetime and the shared turn names an attempt, not a
+  breaker, so it is a design of its own. The failures page names it, with the
+  remedy: read the body inside the attempt.
+- A nested idempotent call is sent once whatever its attempt then does (the
+  2026-11-27 entry above).
+- A call spawned onto a task of its own takes nothing of the attempt (the
+  2026-11-26 entry above).

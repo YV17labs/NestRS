@@ -52,9 +52,9 @@ half-open, one call at a time, until an `Ok` or a counted `Err` answers.
 `retry_ok_if` asks the same of an `Ok`, for a dependency answering "not ready
 yet" as a success: one it takes is sent again, and once the retries are spent the
 last `Ok` is the method's answer. A timeout is always a failure in the breaker,
-and no predicate keeps an idempotent method from sending it again, but for a call
-made inside an attempt of its policy that may still be sent again, which is
-[sent once](#limits).
+and no predicate keeps an idempotent method from sending it again, but for [a
+call inside an attempt of its own policy](#a-call-inside-an-attempt-of-its-own-policy)
+that may still be sent again.
 
 An error whose chain carries a `Problem` with a `Retry-After` — an upstream's
 `429` passed on — holds its retry back at least that long. One asking past
@@ -153,6 +153,49 @@ on to commit what it wrote beside it. Dropped sooner, waiting for its unit's
 turn, a connection or that `SAVEPOINT`'s answer, it leaves what it sits in as it
 was.
 
+## A call inside an attempt of its own policy
+
+A decorated method may call another of its policy, directly or through a call
+under another policy; a `run` may run one; a request a client under the policy's
+[`ResilienceMiddleware`](/fundamentals/resilience-middleware/) sends there, or
+that a middleware below it makes inside a request, may be one. Each is a call
+the attempt it is made in makes, and the attempt shares with it what it holds:
+
+| What | The rule |
+|---|---|
+| Slot | The attempt keeps its slot of the bulkhead until it answers and shares it with one call at a time, which gives it back as it ends, a response's body as that body ends. A call three deep shares it too. A call made while it is shared takes a free slot of its own, or waits `CONCURRENCY_WAIT_MS` for one or for the attempt's to come back, whichever is first; with no wait, the default, it is refused `Full` at once. |
+| Turn of the breaker | A call let through while the attempt's turn is free shares it, a probe's included, and asks the breaker nothing, while the breaker has neither opened, nor been switched by hand, nor had an overdue probe's turn taken since the attempt was let through. After that it meets the breaker as any call does, refused `Open` unsent while it is open, so a job looping over a dead partner stops sending the moment the breaker opens beside it. A call made while another shares the turn meets the breaker on its own: refused `Open` beside a probe, counting its own outcome while it is closed. The turn goes back before the slot, so a call that waited for the attempt's slot takes its turn too. |
+| Token of the rate | The first call sent goes out on the attempt's token, and every later one takes its own. A call refused unsent gives back the turn and spends no token. |
+| Retries | Inside an attempt its policy may still send again, an `idempotent` one with retries left or one inside such an attempt, an idempotent call is sent once, so two retrying methods do not multiply their sends. Inside one it never sends again, a method run once, a last attempt, a request the middleware cannot send again, it is sent again as its own `RETRIES` say. |
+| Counting | The attempt counts once in the breaker: a failure when its own answer fails or a call sharing its turn ended on a failure, otherwise as its own answer is judged. A failure the call was sent again past, then answered, fails nothing. A call the timeout of another policy between it and its attempt cuts once it was sent has timed out in the attempt; one cut while it waits for its token, or dropped by its caller, counts nothing; a panic is a failure. Each call is sent under its own timeout. |
+
+So a `charge()` that fails after its token helper answered counts a failure, a
+failure propagated counts once, and a probe so shaped closes the breaker only if
+both succeed. A `sync()` reading twenty pages one after the other through a
+decorated `fetch_page()` of its policy sends all twenty on its attempt's slot and
+turn, a probe's included, counted as one outcome; twenty pages fanned out inside
+one `import()` meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Under a
+bulkhead of one with a wait, pages failing in turn count as the import's one
+failure: `BREAKER_FAILURES` counts imports there, not pages.
+
+**Where the rule stops:**
+
+- **A call spawned onto a task of its own** is a call of its own: it needs a slot
+  of its own beside the attempt's, and counts its own outcome.
+- **A call outliving the attempt** — a response handed out of a `run`, its body
+  read afterwards — holds nothing of the policy once the attempt has answered:
+  its slot was freed with the attempt's, and its body's failure counts nowhere.
+  Read the body inside the attempt, or send the request outside any `run` of its
+  policy.
+- **A nested idempotent call is sent once whatever its attempt then does**:
+  whether that attempt is sent again is decided only once it answers, after the
+  call has returned. Where it is not, the call has been sent once: when the
+  attempt's `retry_if` refuses the error the call led to, as the one under
+  [Limits](#limits) refuses a `TimedOut`, when its retry is given up past
+  `BACKOFF_CEILING_MS` or the deadline, or when it swallows the call's error and
+  answers `Ok`. A method whose nested calls must keep their own retries is run
+  once.
+
 ## Limits
 
 - **A body consuming or changing an argument its `record_if` reads** is rustc's
@@ -197,46 +240,10 @@ was.
   seconds, an answer due after three is a failure there, whatever the inner
   timeout. One on a task the call spawned goes to its own bound. A call still
   waiting for its token of the rate limit there was never sent and counts
-  nothing, nor in the attempt around it when it shares that attempt's turn.
-- **A call made inside an attempt of its own policy shares that attempt's slot
-  and turn.** A decorated method may call another of its policy, directly or
-  through a call under another. Such a call shares the attempt's slot and turn of
-  the breaker while no other call does, and gives them back as it ends. The first
-  takes the attempt's token. It shares the turn only while the breaker has
-  neither opened nor been switched by hand since the attempt was let through:
-  once it has, every call the attempt makes meets the breaker as any call does,
-  refused `Open` unsent while it is open, so a job looping over a dead partner
-  stops sending the moment the breaker opens beside it. The attempt counts once in the breaker: as a failure
-  when its own answer fails or a call sharing its turn ended on a failure,
-  otherwise as its own answer is judged: a failure a call was sent again past,
-  then answered, fails nothing. So a `charge()` that fails after its token helper
-  answered counts a failure, a failure propagated counts once, and a probe so
-  shaped closes the breaker only if both succeed. The attempt holds its slot
-  until it answers, so `CONCURRENCY` bounds its body past the call, and a
-  bulkhead of one does not refuse the call. A call made while another shares the
-  slot and turn takes a free slot of its own, with its own token and turn,
-  refused `Open` beside a probe, and counts its own outcome. Finding no slot
-  free, it waits `CONCURRENCY_WAIT_MS` for one or for the attempt's, and with no
-  wait, the default, it is refused `Full` at once. One that takes the attempt's
-  slot back takes its turn too, which the call before it gave back first: only
-  its token is its own, and it counts in the attempt as a call sharing the turn
-  does. So twenty pages read inside one `import()` meet `CONCURRENCY` and
-  `RATE_LIMIT` as twenty read alone do, and under a bulkhead of one with a wait,
-  pages failing in turn count as the import's one failure: `BREAKER_FAILURES`
-  counts imports there, not pages. Each is sent under
-  its own timeout. Made in an attempt the policy may still send again — an
-  `idempotent` one with retries left, or one inside such an attempt — an
-  `idempotent` one is sent once, so that two retrying methods do not multiply
-  their sends to the dependency. Whether that attempt is sent again is decided
-  only once it answers, so where it is not, the call has still been sent only
-  once: when its `retry_if` refuses the error the call led to, as the one above
-  refuses a `TimedOut`, when its retry is given up past `BACKOFF_CEILING_MS` or
-  the deadline, or when it swallows the call's error and answers `Ok`. A method
-  whose nested calls must keep their own retries is run once. Made in an attempt
-  it never sends again, a method run once or the last attempt, it is sent again
-  as its own `RETRIES` say, since nothing around it multiplies them, so a token
-  helper answering on its retry leaves the `charge()` around it a success. A call
-  spawned onto a task of its own is a call of its own.
+  nothing.
+- **A call made inside an attempt of its own policy shares what that attempt
+  holds**, as [its own section](#a-call-inside-an-attempt-of-its-own-policy)
+  says.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no
   `fallback` and no `record_if` naming an argument, an argument the body reads nowhere and the part

@@ -114,10 +114,8 @@ impl<'p> Terms<'p> {
     /// otherwise it is refused, taking nothing, told the time to that token.
     /// With no rate, nothing of the rate's runs: no lock, no clock read, no
     /// timer. A call sharing the turn of the attempt it is made in, `shares`
-    /// naming the epoch that attempt was let through in, asks the breaker
-    /// nothing while the breaker's published word is still in that epoch, and
-    /// meets the breaker as any call does once it opened or was switched by
-    /// hand since; one holding that attempt's `token` takes none.
+    /// naming the epoch that attempt was let through in, or holding its
+    /// `token`, is let through as [`Attempting`] says.
     // Inlined, the rate's step alone left out of line: a run with no rate pays no
     // call to be let through.
     #[inline(always)]
@@ -427,8 +425,7 @@ pin_project_lite::pin_project! {
         // attempt makes.
         nested: bool,
         // Whether that attempt may still be sent again, by its run or one around
-        // it: the run is then sent once, the attempt around it being what is
-        // sent again.
+        // it: the run is then sent once.
         again_around: bool,
         // What the last attempt shares with the calls of its policy it makes.
         lent: Lent,
@@ -510,6 +507,16 @@ impl<'p> Run<'p> {
         self.resent < self.retries
     }
 
+    /// The attempt sent next is the run's last, whatever retries are left: its
+    /// transport cannot send the call again (a request no method or key
+    /// declares idempotent, a body it cannot copy), so the calls of its policy
+    /// it makes keep their own retries ([`Attempting`]).
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn last(self: Pin<&mut Self>) {
+        let this = self.project();
+        *this.retries = *this.resent;
+    }
+
     /// The run opened under the unit's deadline, holding a free slot of the
     /// bulkhead, refused at once, in an attempt's order, by a unit out of time
     /// and then by an open breaker — or, finding no slot free, once one is
@@ -521,17 +528,9 @@ impl<'p> Run<'p> {
     /// the rate as it stands once it holds its slot: refused there by a token
     /// still past the rate's wait. It is refused `Full` once no slot is freed
     /// for it in time or as many calls wait for one as may. A refusal is
-    /// counted and told. Opened inside an attempt of its own policy, it shares
-    /// that attempt's slot while no other call does; otherwise it is opened
-    /// so, and takes the attempt's slot should it come back before one is
-    /// freed within the bulkhead's wait — with none, it is refused `Full` at
-    /// once. Opened inside an attempt its policy may still send again, the
-    /// run sends its call once, decided here: should that attempt then end
-    /// without being sent again — its predicate refusing, its retry given up,
-    /// the call's error swallowed — the call was still sent once; inside
-    /// one never sent again — a run once, or the last attempt of a run — it
-    /// keeps its own retries, which nothing around it multiplies, and fails
-    /// that attempt only should it end failing.
+    /// counted and told. Opened inside an attempt of its own policy, it takes
+    /// that attempt's slot and keeps or drops its retries as [`Attempting`]
+    /// says.
     pub(crate) fn poll_open(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -627,12 +626,8 @@ impl<'p> Run<'p> {
     /// up. A panic in the call, or in a predicate judging its answer, counts
     /// as a failure, and is handed back for the run to roll the attempt's
     /// savepoint back before it unwinds on. A run opened inside an attempt of
-    /// its own policy shares that attempt's turn of the breaker, a probe's
-    /// included, while no other call does, and takes its token of the rate
-    /// when no call took it: it then asks the rate nothing, and the breaker
-    /// nothing while it is in the epoch that attempt was let through in. Its
-    /// failure there fails that attempt once the run ends on it: one it sends
-    /// again past is owed, and forgiven should a later attempt answer.
+    /// its own policy shares that attempt's turn and token, and counts in it,
+    /// as [`Attempting`] says.
     pub(crate) fn poll_attempt(
         mut self: Pin<&mut Self>,
         mut call: Pin<&mut (dyn Calling + '_)>,
@@ -706,6 +701,9 @@ impl<'p> Run<'p> {
         let this = self.project();
         if *this.resent > 0 {
             this.terms.policy.teller.resent();
+        }
+        if *this.nested {
+            Attempting::spend_token(this.terms.policy);
         }
         // A turn the breaker moved away from since goes back unsent, the call
         // let through on a pass of its own.
@@ -7887,6 +7885,243 @@ mod tests {
                 "{beside:?}: every push past the opening refused unsent: {pushed:?}"
             );
         }
+    }
+
+    /// A call refused unsent spends none of its attempt's token, as it gives
+    /// back the turn: the next call the attempt sends goes out on it. Under
+    /// a rate of one, a push refused `Open` beside a manual opening, then one
+    /// sent once the breaker was closed by hand, goes out on the attempt's
+    /// token, where the refused push had spent it and the sent one was refused
+    /// `Limited`: one send charged twice.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_refused_unsent_spends_no_token_of_its_attempt() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(60),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(60),
+            ..ResilienceConfig::default()
+        });
+        let push = || partner.run(|| async { Ok::<_, Refused>(()) });
+        let pushed = partner
+            .run(|| async {
+                partner
+                    .open_breaker(Duration::from_secs(60))
+                    .expect("a breaker");
+                let refused = push().await;
+                partner.close_breaker().expect("a breaker");
+                Ok::<_, Refused>([refused, push().await])
+            })
+            .await
+            .expect("the job answers what its pushes did");
+        assert!(
+            matches!(
+                pushed[..],
+                [
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Open { .. },
+                        ..
+                    }),
+                    Ok(())
+                ]
+            ),
+            "the refused push spent none of the attempt's token: {pushed:?}"
+        );
+        assert_eq!(partner.rate_available(), Some(0), "one token taken in all");
+    }
+
+    /// A call three runs of its policy deep shares the turn its attempt
+    /// shares: its failure, swallowed by the run between, fails the outermost
+    /// attempt, counted once, where the innermost, asking the breaker on its
+    /// own, counted a second outcome; and a probe so shaped opens the breaker
+    /// again.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_three_deep_fails_the_attempt_its_attempt_shares_once() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(4),
+            breaker_failures: 2,
+            breaker_open: Duration::from_secs(1),
+            ..ResilienceConfig::default()
+        });
+        let partner = &partner;
+        let charge = || async {
+            partner
+                .run(|| async {
+                    partner.run(|| async { Err::<(), _>(Refused) }).await.ok();
+                    Ok::<_, Refused>(())
+                })
+                .await
+        };
+        let charged = partner.run(charge).await;
+        assert!(charged.is_ok(), "{charged:?}");
+        assert_eq!(
+            counted(partner),
+            (1, 1),
+            "the innermost failure counted once, by the outermost attempt"
+        );
+        assert_eq!(partner.breaker_state(), Some(BreakerState::Closed));
+
+        partner
+            .open_breaker(Duration::from_secs(1))
+            .expect("a breaker");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let probed = partner.run(charge).await;
+        assert!(probed.is_ok(), "{probed:?}");
+        assert!(
+            matches!(partner.breaker_state(), Some(BreakerState::Open { .. })),
+            "the probe failed on its innermost call: {:?}",
+            partner.breaker_state()
+        );
+    }
+
+    /// A call sharing its attempt's turn that its caller drops before its
+    /// bound — a `select!` another branch won, a caller's own timer — counts
+    /// nothing in that attempt, as the same call dropped so in no attempt
+    /// counts nothing in its breaker: the attempt answering `Ok` leaves a
+    /// breaker one failure opens closed, counted once, a success.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_sharing_its_attempts_turn_dropped_by_its_caller_counts_nothing_there() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            timeout: Duration::from_secs(5),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let answered = partner
+            .run(|| async {
+                let dropped =
+                    tokio::time::timeout(Duration::from_millis(100), partner.run(silent)).await;
+                assert!(dropped.is_err(), "its caller gave up first");
+                Ok::<_, Refused>(())
+            })
+            .await;
+        assert!(answered.is_ok(), "{answered:?}");
+        assert_eq!(partner.breaker_state(), Some(BreakerState::Closed));
+        assert_eq!(counted(&partner), (1, 0), "the attempt alone, a success");
+    }
+
+    /// A call sharing its attempt's turn that panics fails that attempt, as a
+    /// panic in the attempt's own call does, though the attempt contains the
+    /// panic and answers `Ok`: a breaker one failure opens opens.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_sharing_its_attempts_turn_that_panics_fails_the_attempt() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let answered = partner
+            .run(|| async {
+                let unwound = nest_rs_core::panic::contain(partner.run(|| async {
+                    if true {
+                        panic!("the upstream's client panicked");
+                    }
+                    Ok::<_, Refused>(())
+                }))
+                .await;
+                assert!(unwound.is_err(), "the nested call unwound");
+                Ok::<_, Refused>(())
+            })
+            .await;
+        assert!(answered.is_ok(), "{answered:?}");
+        assert!(
+            matches!(partner.breaker_state(), Some(BreakerState::Open { .. })),
+            "the nested panic failed the attempt: {:?}",
+            partner.breaker_state()
+        );
+    }
+
+    /// A call sharing its attempt's turn whose `Err` its `record_if` refuses
+    /// counts in neither direction, so it fails nothing in that attempt: the
+    /// attempt answering `Ok` counts once, a success.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_sharing_its_attempts_turn_answering_an_err_record_if_refuses_fails_nothing() {
+        type Polled = Answer<(), Refused>;
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let answered = partner
+            .run(|| async {
+                let declined = partner
+                    .run_once::<Polled, _, Cancellable, _>(
+                        None,
+                        judging(PhantomData::<Polled>, every, none, none),
+                        |_| async { Err(Refused) },
+                    )
+                    .await;
+                assert!(matches!(declined, Err(ResilienceError::Failed(Refused))));
+                Ok::<_, Refused>(())
+            })
+            .await;
+        assert!(answered.is_ok(), "{answered:?}");
+        assert_eq!(partner.breaker_state(), Some(BreakerState::Closed));
+        assert_eq!(counted(&partner), (1, 0), "the attempt alone, a success");
+    }
+
+    /// A call of the policy spawned onto a task of its own from inside an
+    /// attempt is a call of its own: it shares nothing of the attempt, so
+    /// under a bulkhead of one with no wait it finds the attempt's slot taken
+    /// and is refused `Full`, and its failure counts on its own.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_spawned_from_an_attempt_is_a_call_of_its_own() {
+        let partner = Arc::new(policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(1),
+            breaker_window: Some(4),
+            breaker_failures: 4,
+            ..ResilienceConfig::default()
+        }));
+        let spawning = Arc::clone(&partner);
+        let spawned = partner
+            .run(|| async move {
+                tokio::spawn(async move { spawning.run(|| async { Err::<(), _>(Refused) }).await })
+                    .await
+                    .map_err(|_joined| Refused)
+            })
+            .await;
+        assert!(
+            matches!(
+                spawned,
+                Ok(Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                }))
+            ),
+            "{spawned:?}"
+        );
+        assert_eq!(counted(&partner), (1, 0), "the attempt alone counted");
+
+        let unbounded = Arc::new(policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(4),
+            breaker_failures: 4,
+            ..ResilienceConfig::default()
+        }));
+        let spawning = Arc::clone(&unbounded);
+        let spawned = unbounded
+            .run(|| async move {
+                tokio::spawn(async move { spawning.run(|| async { Err::<(), _>(Refused) }).await })
+                    .await
+                    .map_err(|_joined| Refused)
+            })
+            .await;
+        assert!(
+            matches!(spawned, Ok(Err(ResilienceError::Failed(Refused)))),
+            "{spawned:?}"
+        );
+        assert_eq!(
+            counted(&unbounded),
+            (2, 1),
+            "the spawned call's failure counted on its own, the attempt's success too"
+        );
     }
 
     /// An attempt whose call answered within its bound, inside a unit whose

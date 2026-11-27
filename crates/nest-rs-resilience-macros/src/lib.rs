@@ -152,9 +152,10 @@ mod testing;
 /// `self.is_transient`, it is rustc's `E0615`, whose help writes a call no
 /// predicate is. A timeout is no
 /// `E`, so no predicate reads it: it is always a failure in the breaker, and
-/// sent again by an `idempotent` method as its retries allow — but for a call
-/// made inside an attempt of its policy that may still be sent again, which
-/// is sent once. `retry_if`, `retry_ok_if` and
+/// sent again by an `idempotent` method as its retries allow, but for [a call
+/// inside an attempt of its own
+/// policy](https://nestrs.dev/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy)
+/// that may still be sent again. `retry_if`, `retry_ok_if` and
 /// `record_if` judge an attempt's answer, so one that panics fails its attempt
 /// as a panic in the body does: one failure in the breaker, the savepoint it
 /// ran in rolled back, and the panic unwinds from the method. `fallback_if`

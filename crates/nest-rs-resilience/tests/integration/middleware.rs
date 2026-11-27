@@ -1807,6 +1807,75 @@ async fn a_request_sent_inside_an_attempt_never_sent_again_is_sent_again() {
     assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 }
 
+/// A middleware below the policy's fetching a credential through that very
+/// policy before each request, the fetch failing once then answering.
+struct Credentialing {
+    policy: Arc<ResiliencePolicy>,
+    fetched: Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl reqwest_middleware::Middleware for Credentialing {
+    async fn handle(
+        &self,
+        req: reqwest::Request,
+        extensions: &mut http::Extensions,
+        next: reqwest_middleware::Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        self.fetched.store(0, Ordering::Relaxed);
+        let fetched = &self.fetched;
+        let _credential = self
+            .policy
+            .run_idempotent(|| async {
+                if fetched.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Err(std::io::Error::other("the credential store is down"))
+                } else {
+                    Ok("credential")
+                }
+            })
+            .await;
+        next.run(req, extensions).await
+    }
+}
+
+/// A call of the policy made inside a request's attempt — a middleware
+/// below the policy's calling it — keeps its retries when the request is
+/// never sent again, a `POST`, as inside any attempt never sent again: the
+/// fetch is sent twice. Inside a `GET` the middleware may send again, it is
+/// sent once.
+#[tokio::test]
+async fn a_call_made_inside_a_request_never_sent_again_keeps_its_retries() {
+    for (method, fetches) in [(reqwest::Method::POST, 2), (reqwest::Method::GET, 1)] {
+        let peer = answering([]).await;
+        let (_app, policy) = policy(retrying()).await;
+        let fetched = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let authority =
+            reqwest::Certificate::from_pem(AUTHORITY.pem().as_bytes()).expect("the authority");
+        let http = reqwest_middleware::ClientBuilder::new(
+            reqwest::Client::builder()
+                .tls_certs_only([authority])
+                .build()
+                .expect("a client"),
+        )
+        .with(ResilienceMiddleware::new(Arc::clone(&policy)))
+        .with(Credentialing {
+            policy: Arc::clone(&policy),
+            fetched: Arc::clone(&fetched),
+        })
+        .with(ReqwestMiddleware::new())
+        .build();
+
+        let answered = http
+            .request(method.clone(), peer.url(PARCEL))
+            .send()
+            .await
+            .expect("answered");
+
+        assert_eq!(answered.status(), StatusCode::OK, "{method}");
+        assert_eq!(fetched.load(Ordering::Relaxed), fetches, "{method}");
+    }
+}
+
 /// A nested request's body gives the attempt's slot back as it ends: two
 /// parcels read whole one after the other inside one attempt under a
 /// bulkhead of one both answer, the second on the slot the first gave back.
@@ -1898,6 +1967,44 @@ async fn a_body_cut_short_inside_an_attempt_of_its_own_policy_fails_that_attempt
         matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
         "the body's failure failed the attempt: {:?}",
         policy.breaker_state()
+    );
+}
+
+/// A response handed out of the attempt its request was sent in is read
+/// past that attempt, which has answered: its body holds nothing of the
+/// policy, no slot while it is read and no turn its failure counts in, so a
+/// body cut short leaves a breaker of one failure closed. Named on the
+/// failures page as the limit of a nested call.
+#[tokio::test]
+async fn a_body_read_after_its_attempt_answered_holds_nothing_of_the_policy() {
+    let peer = answering([PeerAnswer::truncated(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        concurrency: Some(1),
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+    let http = client(Arc::clone(&policy));
+    let url = peer.url(PARCEL);
+
+    let handed_out = policy
+        .run(|| async { Ok::<_, CarrierFailed>(http.get(&url).send().await?) })
+        .await
+        .expect("the head answered inside the attempt");
+    assert_eq!(
+        policy.concurrency_running(),
+        Some(0),
+        "no slot held past the attempt"
+    );
+    assert!(handed_out.bytes().await.is_err(), "the body was cut short");
+
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+    let stats = policy.breaker_stats().expect("the policy has a breaker");
+    assert_eq!(
+        (stats.outcomes, stats.failures),
+        (1, 0),
+        "the attempt alone"
     );
 }
 

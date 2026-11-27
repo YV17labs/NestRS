@@ -126,8 +126,8 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   line, no transition and no event, a half-open breaker staying half-open
   until an `Ok` or a counted `Err`. A timeout and a
   panic are failures no predicate reads, and a timeout is sent again by an
-  `idempotent` method as its retries allow, but for a call nested in an
-  attempt of its policy that may still be sent again, sent once. A predicate is a function's path or a closure,
+  `idempotent` method as its retries allow, but for [a call inside an attempt
+  of its own policy](https://nestrs.dev/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy) that may still be sent again. A predicate is a function's path or a closure,
   reading `self` and the arguments by reference. A `retry_if`, `retry_ok_if`
   or `record_if` that panics fails its attempt as a panic in the body does; a
   `fallback_if` or a fallback that panics, asked once the run is over, unwinds
@@ -161,28 +161,10 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   caller's bound. A call made inside an attempt of its own policy — a decorated
   method calling another of its policy, directly or through a call under another,
   or a request a client under that policy's `ResilienceMiddleware` sends there —
-  is a call that attempt makes. It shares the attempt's slot and turn of the
-  breaker, a probe's included, while no other call does, the first taking its
-  token; the turn only while the breaker has neither opened nor been switched by
-  hand since the attempt was let through, after which each call meets the
-  breaker as any does, refused `Open` unsent while it is open. The attempt keeps its slot until it answers, so `CONCURRENCY` bounds
-  its body past the call, and it counts once: a failure when its own answer or
-  a call sharing its turn ended failing, otherwise as its answer is judged — a
-  failure a call was sent again past, then answered, fails nothing. A call made
-  while another shares them takes a free slot of its own, with its own token
-  and turn, and counts its own outcome; waiting `CONCURRENCY_WAIT_MS` for one —
-  refused `Full` at once with no wait — it may take the attempt's back first,
-  and then its turn too, counting in the attempt with only its token its own.
-  So `CONCURRENCY`
-  and `RATE_LIMIT` bound the calls an attempt fans out as they bound calls made
-  alone. Each is sent under its own timeout. Inside an attempt its policy may
-  still send again an idempotent one is sent once, so two retrying runs do not
-  multiply their sends — decided as the call opens, so an attempt that then
-  ends without being sent again (its `retry_if` refusing the error the call led
-  to, its retry given up past the ceiling or the deadline, the call's error
-  swallowed into an `Ok`) leaves it sent once; inside one never sent again — a run once, or the last attempt —
-  it keeps its own retries, which nothing around it multiplies, and fails the
-  attempt only should it end failing. The method's error
+  is a call that attempt makes, sharing its slot, its turn of the breaker and its
+  token and counting in it as [its section](https://nestrs.dev/fundamentals/failures-and-fallbacks/#a-call-inside-an-attempt-of-its-own-policy) states, so
+  `CONCURRENCY` and `RATE_LIMIT` bound the calls an attempt fans out as they bound
+  calls made alone and the attempt counts once. The method's error
   owns what it says (`'static`), one borrowing an argument being rustc's lifetime
   error at the answer.
 - **A fallback answers in place of the error a run ends on.**

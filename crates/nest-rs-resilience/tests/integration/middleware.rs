@@ -1776,11 +1776,18 @@ async fn a_request_sent_inside_an_attempt_of_its_own_policy_is_counted_once_by_t
 
 /// An idempotent request sent inside an attempt its policy never sends again
 /// — a run once — is sent again as the middleware's retries say: nothing
-/// around it multiplies them.
+/// around it multiplies them. Answered on its retry, it fails no attempt:
+/// the run once counts once, a success, and a breaker of one failure stays
+/// closed.
 #[tokio::test]
 async fn a_request_sent_inside_an_attempt_never_sent_again_is_sent_again() {
     let peer = answering([PeerAnswer::status(503)]).await;
-    let (_app, policy) = policy(retrying()).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..retrying()
+    })
+    .await;
     let http = client(Arc::clone(&policy));
     let url = peer.url(PARCEL);
 
@@ -1791,6 +1798,13 @@ async fn a_request_sent_inside_an_attempt_never_sent_again_is_sent_again() {
 
     assert_eq!(answered, StatusCode::OK, "the request sent again answered");
     assert_eq!(peer.requests().len(), 2, "sent again once");
+    let stats = policy.breaker_stats().expect("the policy has a breaker");
+    assert_eq!(
+        (stats.outcomes, stats.failures),
+        (1, 0),
+        "the run once counted once, a success: the request answered"
+    );
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 }
 
 /// A nested request's body gives the attempt's slot back as it ends: two

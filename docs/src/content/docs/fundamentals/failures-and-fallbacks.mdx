@@ -203,8 +203,9 @@ was.
   once it has, every call the attempt makes meets the breaker as any call does,
   refused `Open` unsent while it is open, so a job looping over a dead partner
   stops sending the moment the breaker opens beside it. The attempt counts once in the breaker: as a failure
-  when its own answer fails or a call sharing its turn failed, otherwise as its
-  own answer is judged. So a `charge()` that fails after its token helper
+  when its own answer fails or a call sharing its turn ended on a failure,
+  otherwise as its own answer is judged: a failure a call was sent again past,
+  then answered, fails nothing. So a `charge()` that fails after its token helper
   answered counts a failure, a failure propagated counts once, and a probe so
   shaped closes the breaker only if both succeed. The attempt holds its slot
   until it answers, so `CONCURRENCY` bounds its body past the call, and a
@@ -218,7 +219,9 @@ was.
   `idempotent` one is sent once, that attempt being what is sent again, and an
   error of its the attempt swallows is sent no more; made in
   one it never sends again, a method run once or the last attempt, it is sent
-  again as its own `RETRIES` say, since nothing around it multiplies them. A call
+  again as its own `RETRIES` say, since nothing around it multiplies them, so a
+  token helper answering on its retry leaves the `charge()` around it a
+  success. A call
   spawned onto a task of its own is a call of its own.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no

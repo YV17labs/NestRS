@@ -2088,3 +2088,46 @@ answering `Ok`, is not sent again by that attempt either: inside an attempt
 that may still be sent again, such a call is sent once even though its attempt
 will not be resent. Closing it means deciding a resend only once the attempt
 answers, which a nested run cannot know as it opens.
+
+## 2026-11-27 — a nested call fails the attempt around it only when it ends failing
+
+The entry above kept a nested idempotent call's retries inside a run once or a
+last attempt, but each of its attempts still gave the shared turn back with
+what it failed on, and the turn kept the first failure. A token fetch inside a
+run-once `charge()` that failed once and answered on its retry failed the
+charge's attempt: three charges answering `Ok` opened a breaker of three
+failures, and a probe so shaped reopened it. The pages said the attempt fails
+when "a call sharing its turn failed"; the call had answered.
+
+- **A failure a nested run sends again past is owed, not given**
+  (`SharedTurn::owing`, `attempting::Owed`). Its attempt gives the turn back
+  free, and the run keeps the failure. A later attempt that answers forgives it;
+  one that fails replaces it, or counts its own as it ends; the run ending
+  otherwise — its retry given up past the ceiling or the deadline, refused
+  unsent — drops it inside the attempt around, which counts it as its failure.
+  A failure the run cannot send again past (its last attempt, a `Final`
+  verdict, a panic) is given with the turn at once, as before. Clearing the
+  first failure the turn holds on a later success, the other way the finding
+  offered, was refused: the turn holds one failure for every call sharing it,
+  so a success would erase another call's. Correctness decided it, the attempt
+  failing on what its calls ended on.
+- **Kept out of line** (`Option<Box<Owed>>`, allocated only by such a
+  failure), its check made only in the shared-turn arm: the first layout, an
+  `Option<Owed>` in `Run` and the check on every settle, measured
+  `run_idempotent` 4–9 % slower. Performance decided it.
+
+Held by run.rs's
+`a_nested_call_answering_on_its_retry_fails_no_attempt_around_it` (three
+charges whose token answers on its retry leave a breaker of three closed,
+counted `(3, 0)`; a probe so shaped closes it; a failing call beside a
+recovered one, and a nested call whose retry is given up past the ceiling,
+still fail the attempt) and the middleware suite's
+`a_request_sent_inside_an_attempt_never_sent_again_is_sent_again` (a GET
+answered `503` then `200` inside a run once leaves a breaker of one failure
+closed, counted `(1, 0)`).
+
+Measured in `benches/policy.rs`, A/B on one container (a call answering at
+once): `run` bare 46.6 → 45.7 ns, breaker 59.5 → 59.9, bulkhead 56.2 → 53.4,
+rate 66.8 → 67.1; `run_idempotent` bare 44.8 → 46.0, breaker 58.6 → 60.0,
+bulkhead 55.2 → 54.1, rate 67.6 → 68.9. `run_idempotent` costs about 1.3 ns,
+3 %, on three of four policies; `run` moves within the spread.

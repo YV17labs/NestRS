@@ -165,7 +165,8 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   hand since the attempt was let through, after which each call meets the
   breaker as any does, refused `Open` unsent while it is open. The attempt keeps its slot until it answers, so `CONCURRENCY` bounds
   its body past the call, and it counts once: a failure when its own answer or
-  a call sharing its turn failed, otherwise as its answer is judged. A call made
+  a call sharing its turn ended failing, otherwise as its answer is judged — a
+  failure a call was sent again past, then answered, fails nothing. A call made
   while another shares them takes a free slot of its own, or, waiting
   `CONCURRENCY_WAIT_MS` for one, the attempt's should it come back first —
   refused `Full` at once with no wait — and its own token and turn, and counts
@@ -174,7 +175,8 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   alone. Each is sent under its own timeout. Inside an attempt its policy may
   still send again an idempotent one is sent once, that attempt being what is
   sent again; inside one never sent again — a run once, or the last attempt —
-  it keeps its own retries, which nothing around it multiplies. The method's error
+  it keeps its own retries, which nothing around it multiplies, and fails the
+  attempt only should it end failing. The method's error
   owns what it says (`'static`), one borrowing an argument being rustc's lifetime
   error at the answer.
 - **A fallback answers in place of the error a run ends on.**

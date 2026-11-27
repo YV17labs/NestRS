@@ -112,8 +112,9 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// breaker while no other call does, the first taking its token — the turn
 /// only while the breaker has neither opened nor been switched by hand since
 /// the attempt was let through, refused unsent once it is open — and counts
-/// in that attempt, once: a failure of its, its body's included, fails the
-/// attempt. A request sent while another shares them takes its own, as one
+/// in that attempt, once, as it ends: a failure it ends on, its body's
+/// included, fails the attempt, and one it was sent again past, then
+/// answered, fails nothing. A request sent while another shares them takes its own, as one
 /// sent alone does, so `CONCURRENCY` and `RATE_LIMIT` bound the requests an
 /// attempt fans out. Inside an attempt the policy may still send again, each
 /// is sent once, that attempt being what is sent again; inside one it never

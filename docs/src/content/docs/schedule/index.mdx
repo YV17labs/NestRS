@@ -261,9 +261,11 @@ decorator that declared it (`every`, `after` or `cron`), then one
 to — its `host`, `method`, `replicas`, `outcome` and `duration_ms`, and the
 `occurrence` a job firing once claimed. It is the same operation line every edge
 files once per unit of work, so `nest_rs::operation=off` in the log filter
-silences it with the others. A failed run adds one `scheduled job failed` line
-at `error` — at `warn` for a `503`, what it runs on unable to serve it in time —
-and the schedule keeps ticking.
+silences it with the others. A failed run adds one line, and the schedule
+keeps ticking: `scheduled job failed` at `error`, or at `warn` either
+`scheduled job failed; unavailable` for a `503`, what it runs on unable to
+serve it in time, or `scheduled job failed; a layer answered it` for a failure
+a layer answered ([Layers around a tick](/schedule/ticks/#layers-around-a-tick)).
 
 A bad cron **literal** never reaches boot — it fails `cargo build`:
 

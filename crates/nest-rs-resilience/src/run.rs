@@ -22,7 +22,7 @@ use nest_rs_database::AtomicError;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::DropGuard;
 
-use crate::attempting::{Attempting, Lent, SharedSlot, SharedTurn, Taken};
+use crate::attempting::{Attempting, Lent, Owed, SharedSlot, SharedTurn, Taken};
 use crate::breaker::{Breaker, Cut, Failure, Pass, Sent};
 use crate::bulkhead::{Full, Slot};
 use crate::call::{Calling, Erased, Judged, Placing, Reads};
@@ -336,7 +336,8 @@ enum Attempt<'p> {
     #[cfg(feature = "reqwest")]
     Outstanding(Outstanding<'p>),
     /// Sent on the turn of the attempt it is made in, a call of that
-    /// attempt's policy: its failure is that attempt's.
+    /// attempt's policy: its failure is that attempt's once the run ends on
+    /// it, and one the run sends again past is owed until then.
     Shared(SharedTurn),
 }
 
@@ -384,10 +385,14 @@ pin_project_lite::pin_project! {
     /// One run of a call under its policy.
     pub(crate) struct Run<'p> {
         // Dropped in order: the attempt in the breaker, handing on a probe's turn,
-        // then its token, its savepoint, what the run waits on — a reservation,
-        // then a probe's pass — and its slot of the bulkhead, its own or the one
-        // it shares.
+        // and what an attempt sent again failed on the turn it shared, then its
+        // token, its savepoint, what the run waits on — a reservation, then a
+        // probe's pass — and its slot of the bulkhead, its own or the one it
+        // shares.
         attempt: Option<Attempt<'p>>,
+        // What an attempt sent again failed on the turn it shared, the failure
+        // of the attempt the run is made in only should the run end failing.
+        owed: Option<Box<Owed>>,
         given_up: Option<DropGuard>,
         savepoint: Option<Savepoint>,
         settling: Option<Box<Settling>>,
@@ -444,6 +449,7 @@ impl<'p> Run<'p> {
     ) -> Self {
         Self {
             attempt: None,
+            owed: None,
             given_up: None,
             savepoint: None,
             settling: None,
@@ -523,7 +529,8 @@ impl<'p> Run<'p> {
     /// once. Opened inside an attempt its policy may still send again, the
     /// run sends its call once, that attempt being what is sent again; inside
     /// one never sent again — a run once, or the last attempt of a run — it
-    /// keeps its own retries, which nothing around it multiplies.
+    /// keeps its own retries, which nothing around it multiplies, and fails
+    /// that attempt only should it end failing.
     pub(crate) fn poll_open(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -622,7 +629,9 @@ impl<'p> Run<'p> {
     /// its own policy shares that attempt's turn of the breaker, a probe's
     /// included, while no other call does, and takes its token of the rate
     /// when no call took it: it then asks the rate nothing, and the breaker
-    /// nothing while it is in the epoch that attempt was let through in.
+    /// nothing while it is in the epoch that attempt was let through in. Its
+    /// failure there fails that attempt once the run ends on it: one it sends
+    /// again past is owed, and forgiven should a later attempt answer.
     pub(crate) fn poll_attempt(
         mut self: Pin<&mut Self>,
         mut call: Pin<&mut (dyn Calling + '_)>,
@@ -770,6 +779,11 @@ impl<'p> Run<'p> {
             Err(Unanswered::Panicked(_)) => Some(Failure::Said(PANICKED)),
             Err(_) => Some(Failure::Said(TIMED_OUT)),
         };
+        if failed.is_none()
+            && let Some(owed) = this.owed.take()
+        {
+            owed.forgive();
+        }
         let counted = match this.attempt.take() {
             Some(Attempt::Sent(sent)) => match (failed, &judged) {
                 (Some(failure), _) => sent.ended(Some(failure)),
@@ -792,11 +806,32 @@ impl<'p> Run<'p> {
                     *this.attempt = Some(Attempt::Shared(turn));
                     Ok(())
                 }
+                // Sent again past it, the run owes that failure to the attempt it
+                // is made in only should it end failing.
+                Ok(Some(said))
+                    if idempotent
+                        && *this.resent < *this.retries
+                        && matches!(
+                            judged,
+                            Ok(Verdict::Failed { .. }) | Err(Unanswered::Elapsed(_))
+                        ) =>
+                {
+                    if let Some(owed) = this.owed.replace(Box::new(turn.owing(said))) {
+                        owed.forgive();
+                    }
+                    Ok(())
+                }
                 Ok(said) => {
+                    if let Some(owed) = this.owed.take() {
+                        owed.forgive();
+                    }
                     turn.ended(said);
                     Ok(())
                 }
                 Err(payload) => {
+                    if let Some(owed) = this.owed.take() {
+                        owed.forgive();
+                    }
                     turn.ended(Some(Cow::Borrowed(PANICKED)));
                     Err(payload)
                 }
@@ -1066,6 +1101,8 @@ impl<'p> Run<'p> {
     /// more.
     fn over(self: Pin<&mut Self>) {
         let mut this = self.project();
+        // Counted now, inside the attempt the run is made in: the run ended failing.
+        *this.owed = None;
         *this.slot = None;
         *this.shared_slot = None;
         *this.stage = Stage::Answered;
@@ -7327,6 +7364,101 @@ mod tests {
             calls.swap(0, Ordering::Relaxed),
             1 + 1 + (1 + 1 + 3),
             "once while any attempt around is still to be sent again"
+        );
+    }
+
+    /// A call of its policy an attempt makes fails that attempt only when it
+    /// ends on a failure: a token fetch inside a run once that answers on its
+    /// retry fails none, so three charges answering `Ok` leave a breaker of
+    /// three failures closed, each counted once, a success, and a probe so
+    /// shaped closes the breaker. A call ending on its failure after one that
+    /// recovered still fails the attempt.
+    #[tokio::test(start_paused = true)]
+    async fn a_nested_call_answering_on_its_retry_fails_no_attempt_around_it() {
+        let partner = policy(ResilienceConfig {
+            retries: Some(2),
+            breaker_window: Some(3),
+            breaker_failures: 3,
+            breaker_open: Duration::from_secs(60),
+            ..ResilienceConfig::default()
+        });
+        let tries = AtomicU32::new(0);
+        let (partner, tries) = (&partner, &tries);
+        let token = || async move {
+            tries.store(0, Ordering::Relaxed);
+            partner
+                .run_idempotent(|| async {
+                    if tries.fetch_add(1, Ordering::Relaxed) == 0 {
+                        Err(Refused)
+                    } else {
+                        Ok("token")
+                    }
+                })
+                .await
+                .map_err(|_failed| Refused)
+        };
+
+        for _ in 0..3 {
+            let charged = partner.run(token).await;
+            assert!(matches!(charged, Ok("token")), "{charged:?}");
+            assert_eq!(
+                tries.load(Ordering::Relaxed),
+                2,
+                "the token sent again once"
+            );
+        }
+        assert_eq!(partner.breaker_state(), Some(BreakerState::Closed));
+        assert_eq!(
+            counted(partner),
+            (3, 0),
+            "each charge counted once, a success"
+        );
+
+        partner
+            .open_breaker(Duration::from_secs(1))
+            .expect("a breaker");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let probed = partner.run(token).await;
+        assert!(matches!(probed, Ok("token")), "{probed:?}");
+        assert_eq!(
+            partner.breaker_state(),
+            Some(BreakerState::Closed),
+            "the probe answered, its token on a retry"
+        );
+
+        let swallowed = partner
+            .run(|| async {
+                let fetched = token().await;
+                partner.run(|| async { Err::<(), _>(Refused) }).await.ok();
+                fetched
+            })
+            .await;
+        assert!(matches!(swallowed, Ok("token")), "{swallowed:?}");
+        assert_eq!(
+            counted(partner).1,
+            1,
+            "a call sharing the turn ended on its failure: the attempt failed"
+        );
+
+        let past_ceiling = partner
+            .run(|| async {
+                partner
+                    .run_idempotent(|| async {
+                        Err::<(), _>(Throttled(
+                            Problem::new(429, nest_rs_core::code::RATE_LIMITED)
+                                .with_retry_after(3600),
+                        ))
+                    })
+                    .await
+                    .ok();
+                Ok::<_, Refused>(())
+            })
+            .await;
+        assert!(past_ceiling.is_ok(), "{past_ceiling:?}");
+        assert_eq!(
+            counted(partner).1,
+            2,
+            "a call whose retry was given up ended on the failure before it"
         );
     }
 

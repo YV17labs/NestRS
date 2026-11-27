@@ -5,8 +5,9 @@
 //! breaker until it answers, and shares each with one such call at a time,
 //! which gives it back as it ends; the first call let through takes its token
 //! of the rate. A call sharing its turn counts in the attempt's outcome, once,
-//! and shares it only while the breaker is in the epoch the attempt was let
-//! through in. A call made in an attempt its policy may still send again is
+//! as it ends — failed only when it ends on a failure, not on one it sends
+//! again past — and shares it only while the breaker is in the epoch the
+//! attempt was let through in. A call made in an attempt its policy may still send again is
 //! sent once, that attempt being what is sent again.
 
 use std::borrow::Cow;
@@ -151,12 +152,54 @@ impl SharedTurn {
             });
         });
     }
+
+    /// The call sharing the turn failed on `failed` in an attempt it sends
+    /// again: the turn goes back to share, and the failure is owed to the
+    /// attempt, its own only should the call end on it.
+    pub(crate) fn owing(self, failed: Cow<'static, str>) -> Owed {
+        let name = self.name;
+        drop(self);
+        Owed {
+            name,
+            failed: Some(failed),
+        }
+    }
 }
 
 impl Drop for SharedTurn {
     fn drop(&mut self) {
         let epoch = self.epoch;
         ATTEMPTING.with(|attempting| attempting.named(self.name, |lent| lent.turn = Some(epoch)));
+    }
+}
+
+/// What a call sharing the turn of the attempt named `name` failed on in an
+/// attempt it sends again: the attempt's failure once the call is over,
+/// dropped with it, unless a later attempt of the call answered and
+/// [forgave](Self::forgive) it.
+#[must_use = "an owed failure is counted as it is dropped"]
+pub(crate) struct Owed {
+    name: NonZeroU64,
+    failed: Option<Cow<'static, str>>,
+}
+
+impl Owed {
+    /// The call answered on a later attempt, or failed on one counted in its
+    /// place: the attempt it is made in owes nothing to this one.
+    pub(crate) fn forgive(mut self) {
+        self.failed = None;
+    }
+}
+
+impl Drop for Owed {
+    fn drop(&mut self) {
+        if let Some(failed) = self.failed.take() {
+            ATTEMPTING.with(|attempting| {
+                attempting.named(self.name, |lent| {
+                    lent.met().failed.get_or_insert(failed);
+                })
+            });
+        }
     }
 }
 

@@ -720,6 +720,9 @@ pub(crate) enum Failure<'a> {
     /// The error the call answered, told as its chain is
     /// ([`told`]).
     Error(&'a (dyn Error + 'static)),
+    /// What a call of the policy made inside the attempt failed on, said as
+    /// that call ended.
+    Told(&'a str),
 }
 
 impl Failure<'_> {
@@ -730,6 +733,7 @@ impl Failure<'_> {
         match self {
             Self::Said(said) => Ok(Cow::Borrowed(said)),
             Self::Error(error) => catch_unwind(AssertUnwindSafe(|| told(error))).map(Cow::Owned),
+            Self::Told(told) => Ok(Cow::Owned(told.to_owned())),
         }
     }
 }
@@ -913,18 +917,6 @@ impl Sent<'_> {
         }
     }
 
-    /// The attempt lent, with no borrow of the breaker and nothing told, to
-    /// the first call of its policy its own call makes.
-    #[inline]
-    pub(crate) fn lend(self) -> LentAttempt {
-        let sent = ManuallyDrop::new(self);
-        LentAttempt {
-            probe: sent.probe,
-            epoch: sent.epoch,
-            until: sent.until,
-        }
-    }
-
     /// The attempt held past its run, with no borrow of the breaker, by what
     /// its call answered: a response whose body is still to read. No timer
     /// gives it up from here, so a call refused beside a probe held is told
@@ -940,24 +932,6 @@ impl Sent<'_> {
             probe: sent.probe,
             epoch: sent.epoch,
         }
-    }
-}
-
-/// A [`Sent`] attempt lent, with no borrow of the breaker, to the first call
-/// of its policy its own call makes: that call's outcome is the attempt's,
-/// counted once, and what the attempt answered counts nowhere. Taken up again
-/// through [`Breaker::adopt`], by that call or, none taking it, by the attempt.
-#[must_use = "a lent attempt is settled through `Breaker::adopt` alone"]
-pub(crate) struct LentAttempt {
-    probe: bool,
-    epoch: u64,
-    until: Option<Instant>,
-}
-
-impl LentAttempt {
-    /// The instant the lending attempt's bound ends at, when it ends at one.
-    pub(crate) const fn until(&self) -> Option<Instant> {
-        self.until
     }
 }
 
@@ -1115,19 +1089,6 @@ impl Breaker {
             probe: probing.is_some(),
             epoch: held.epoch,
         })
-    }
-
-    /// The attempt `lent` was taken from, one this breaker admitted, to settle
-    /// as one whose bound ends at `until`: in the epoch it was admitted in, a
-    /// probe keeping its turn.
-    #[inline]
-    pub(crate) const fn adopt(&self, lent: LentAttempt, until: Option<Instant>) -> Sent<'_> {
-        Sent {
-            breaker: self,
-            probe: lent.probe,
-            epoch: lent.epoch,
-            until,
-        }
     }
 
     /// The attempt `held` was taken from, one this breaker admitted, to settle:

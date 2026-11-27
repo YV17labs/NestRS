@@ -108,11 +108,14 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 ///
 /// A request sent inside an attempt of its own policy — a
 /// [`run`](ResiliencePolicy::run) of it, or a method `#[resilient]` with it —
-/// is a call that attempt makes: the first takes the attempt's slot, token
-/// and turn of the breaker, and counts for it, once; every other takes its
-/// own, as a request sent alone does, so `CONCURRENCY` and `RATE_LIMIT` bound
-/// the requests an attempt fans out. Each is sent once: the attempt around it
-/// is what the policy sends again.
+/// is a call that attempt makes. It shares the attempt's slot and turn of the
+/// breaker while no other call does, the first taking its token, and counts
+/// in that attempt, once: a failure of its, its body's included, fails the
+/// attempt. A request sent while another shares them takes its own, as one
+/// sent alone does, so `CONCURRENCY` and `RATE_LIMIT` bound the requests an
+/// attempt fans out. Each is sent once: the attempt around it is what the
+/// policy sends again. A body read after that attempt has answered holds
+/// nothing of the policy.
 ///
 /// So a response is read or dropped, never kept: one held unread holds its
 /// slot, and a probe's holds the half-open breaker's one turn, for as long as
@@ -201,9 +204,6 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
             run.retrying(&retry);
             run.as_mut().back_off(&retry);
             poll_fn(|cx| run.as_mut().poll_back_off(cx)).await;
-            poll_fn(|cx| run.as_mut().poll_open(cx))
-                .await
-                .map_err(|refusal| refused(refusal, run.instance()))?;
         }
     }
 }

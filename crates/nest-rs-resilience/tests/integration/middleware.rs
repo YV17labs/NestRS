@@ -1729,9 +1729,9 @@ impl Courier {
 }
 
 /// A request sent inside an attempt of its own client's policy — by a run of
-/// that policy or a method decorated with it — takes that attempt's slot and
+/// that policy or a method decorated with it — shares that attempt's slot and
 /// turn: its body is read whole under them, no second slot is taken, and each
-/// attempt counts once, by its request.
+/// attempt counts once, its request's outcome in it.
 #[tokio::test]
 async fn a_request_sent_inside_an_attempt_of_its_own_policy_is_counted_once_by_that_attempt() {
     const BODY: &str = "a parcel on its way";

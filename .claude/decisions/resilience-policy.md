@@ -1836,6 +1836,10 @@ operator sets those bounds for — the partner's quota — so it was refused, by
 security and correctness: the bound an operator sets holds whatever shape the
 code calling it takes.
 
+Superseded for the slot and the turn, which no longer move, by the entry
+"an attempt keeps its slot and its turn, sharing each with one call of its
+policy at a time".
+
 - **An attempt lends what it holds to the first call of its policy it makes**
   (`src/attempting.rs`, `Lending` in `src/run.rs`). While a thread polls an
   attempt, its run's slot and its turn — its attempt in the breaker, a probe's
@@ -1881,3 +1885,88 @@ stays held beside it, so under a bulkhead of one such a call waits for its own
 until the attempt ends or its wait runs out. The middleware's own retry after a
 request whose attempt lent its slot takes one again as a run does, but no test
 sends a call of the same policy from inside a request's middleware chain.
+
+## 2026-11-27 — an attempt keeps its slot and its turn, sharing each with one call of its policy at a time
+
+The entry above moved the attempt's slot and turn to the first call of its
+policy the attempt made. Each then left with that call, and two defects
+followed, both reproduced by a test that failed first.
+
+- The rest of the attempt ran holding no slot. Three `push()` calls, each
+  fetching a token through a `#[resilient]` helper of its policy and then
+  pushing, ran three at once under `CONCURRENCY=1`. Every caller waiting for
+  the bound got in beside them.
+- The attempt's own answer counted nowhere. A `charge()` whose token helper
+  answered `Ok` and which then failed itself counted one success, so the
+  breaker never opened, and a probe so shaped closed it onto a failing
+  dependency.
+
+Both come from moving something the attempt still needed. Security and
+correctness decided it: the attempt keeps what it holds until it answers, so
+`CONCURRENCY` bounds its body whatever that body calls, and its own failure
+always counts. This supersedes the entry above for the slot and the turn. The
+token is unchanged: the first call let through takes it, and every later call
+takes its own.
+
+- **The slot is shared, never moved** (`SharedSlot`, `src/attempting.rs`). The
+  run holds its slot for its whole run, retries included, as the 2026-11-20
+  entry said. While the thread polls an attempt, that attempt's entry says
+  whether its slot is free to share. A call of its policy it makes shares the
+  slot while no other call does and gives it back as it ends. A call made while
+  the slot is out waits for a slot of its own or for the attempt's to come
+  back, whichever comes first, and the call giving the slot back wakes the
+  ones waiting for it. A fan-out under a bulkhead of one therefore reads its
+  pages one at a time on the attempt's slot. This answers the entry above's
+  reason for moving the slot, a returned slot sitting unused while a fan-out
+  waited, without letting the attempt go on unbounded. The re-entry before a
+  retry (`poll_back_off`, then `poll_open`, the middleware's loop too) is
+  gone: an attempt never loses its slot.
+- **The turn of the breaker is shared, never moved** (`SharedTurn`). A call
+  sharing it asks the breaker nothing (a probe's turn included) and counts in
+  no window of its own. As it ends it gives the turn back with what it failed
+  on, said then, since its error ends with it (`Failure::Told`). The attempt
+  counts once, as a failure when its own answer failed or a call sharing its
+  turn did, and otherwise as its own answer is judged. A failure counts once
+  when it propagates, a method's own failure counts after a call that
+  succeeded, and a call failing inside a method that answers `Ok` still fails
+  the attempt. Calls sharing the turn one after another all count in it, so a
+  half-open breaker lets a method's two helpers through on its probe. A call
+  made while the turn is out meets the breaker as any call does: it is refused
+  `Open` beside a probe, or counted on its own while the breaker is closed.
+  `Sent::lend`, `LentAttempt` and `Breaker::adopt` are gone.
+- **What a response holds of a shared slot and turn** goes in its `Held`, so a
+  body read inside the attempt keeps the slot and fails the attempt.
+
+Held by run.rs's tests:
+- `an_attempt_holds_its_slot_past_a_call_of_its_policy_it_made`: three pushes
+  under a bulkhead of one run one at a time (three before), and five pages fanned
+  out under it are read one at a time.
+- `an_attempt_whose_call_of_its_policy_succeeded_counts_its_own_failure`: the
+  charge opens a breaker of one failure (it stayed `Closed` before), and so does
+  a probe so shaped, as well as one whose helper failed beneath an `Ok`.
+- The earlier tests: twenty pages, the probe and its fan-out, the
+  walled-in nested failure counted once, and the retry holding its slot.
+
+The cost is measured in `benches/policy.rs`, A/B against the entry above on one
+container, for a call answering at once through `run`:
+
+| Policy | Before (ns) | After (ns) |
+|---|---|---|
+| bare | 39.7 | 41.8 |
+| breaker | 50.9 | 56.9 |
+| bulkhead | 45.9 | 52.0 |
+| rate | 59.1 | 64.6 |
+
+Two things cost it: the flags the attempt shares, moved into the thread-local
+and back on each poll, and a larger run. A failure or a wait for the slot is
+boxed and allocated only when it happens. The cost is paid by the order of the
+values: the bounds an operator sets hold, then speed.
+
+**Not done, named:**
+- A call that outlives the attempt it shares with holds nothing of it once
+  that attempt answers. Such a call is a future moved out of the attempt, or a
+  response handed out of a `run` whose body is read afterwards. Its slot is
+  freed with the attempt's, and its body's failure counts nowhere.
+- A call spawned onto a task of its own still takes nothing of the attempt.
+  It waits for a slot of its own beside the attempt's, as the entry above
+  named.

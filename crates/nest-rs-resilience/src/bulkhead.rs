@@ -68,18 +68,18 @@ impl Drop for Slot<'_> {
     }
 }
 
-/// A slot its run took, held with no borrow of the bulkhead — past the run by
-/// what the run answered, a response whose body is still to read, or by the
-/// thread polling its attempt, for the first call of the policy that attempt
-/// makes to take ([`Attempting`](crate::attempting::Attempting)). It is freed
-/// through [`Bulkhead::resume`] alone, never by its drop, so what holds it
-/// resumes it at its own.
+/// A slot its run took, held past the run by what the run answered — a
+/// response whose body is still to read — with no borrow of the bulkhead. It
+/// is freed through [`Bulkhead::resume`] alone, never by its drop, so what
+/// holds it resumes it at its own.
+#[cfg(feature = "reqwest")]
 #[must_use = "a held slot is freed through `Bulkhead::resume` alone"]
 pub(crate) struct HeldSlot(());
 
 impl Bulkhead {
     /// `slot`, one of this bulkhead's, held with no borrow of it: its call
     /// stays counted among the ones running.
+    #[cfg(feature = "reqwest")]
     pub(crate) fn hold(&self, slot: Slot<'_>) -> HeldSlot {
         debug_assert!(
             std::ptr::eq(slot.0, self),
@@ -91,6 +91,7 @@ impl Bulkhead {
 
     /// The slot `held` took, one of this bulkhead's, freed as it is dropped —
     /// its holder's unwinding included.
+    #[cfg(feature = "reqwest")]
     pub(crate) fn resume(&self, held: HeldSlot) -> Slot<'_> {
         let HeldSlot(()) = held;
         Slot(self)

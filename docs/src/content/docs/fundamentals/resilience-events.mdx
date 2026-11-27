@@ -58,7 +58,7 @@ What the policy holds now is read on it, each `None` for a mechanism that is off
 |---|---|
 | `breaker_state()` | `Closed`, `Open` with its `retry_after`, or `HalfOpen`: what a call arriving now meets |
 | `breaker_stats()` | the `outcomes` its window holds and the `failures` among them, and `failure_rate()` from `0.0` to `1.0`; no outcome while open or half-open, the window being forgotten as the breaker opens |
-| `concurrency_running()` | the calls holding a slot of the bulkhead, each for its whole run; a call is in this read or the next, never both |
+| `concurrency_running()` | the calls holding a slot of the bulkhead, each for its whole run, a call sharing the slot of the attempt it is made in counted in that attempt; a call is in this read or the next, never both |
 | `concurrency_waiting()` | the calls waiting for a slot |
 | `rate_available()` | the tokens of the rate limit free now, none while an attempt waits for one |
 

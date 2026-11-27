@@ -6,6 +6,9 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::borrow::Cow;
+
+use crate::attempting::{SharedSlot, SharedTurn};
 use crate::breaker::{Failure, HeldAttempt, Unwound};
 use crate::bulkhead::HeldSlot;
 use crate::error::{PANICKED, ResilienceError, ResilienceRefusal, TIMED_OUT};
@@ -19,10 +22,24 @@ use crate::mechanisms::Mechanisms;
 /// answer stands as it was judged.
 pub(crate) struct Held {
     policy: Arc<Mechanisms>,
-    attempt: Option<HeldAttempt>,
-    slot: Option<HeldSlot>,
+    attempt: Option<Attempt>,
+    slot: Option<Slot>,
     left: Duration,
     bound: Duration,
+}
+
+/// The attempt a held answer counts in: the run's own, or the turn it shares
+/// of the attempt it was made in, whose failure the answer's is.
+pub(crate) enum Attempt {
+    Own(HeldAttempt),
+    Shared(SharedTurn),
+}
+
+/// The slot a held answer holds: the run's own, or the one it shares of the
+/// attempt it was made in, given back as the answer ends.
+pub(crate) enum Slot {
+    Own(HeldSlot),
+    Shared(SharedSlot),
 }
 
 impl Held {
@@ -30,8 +47,8 @@ impl Held {
     /// with `left` of it, and its `slot`.
     pub(crate) const fn new(
         policy: Arc<Mechanisms>,
-        attempt: Option<HeldAttempt>,
-        slot: Option<HeldSlot>,
+        attempt: Option<Attempt>,
+        slot: Option<Slot>,
         left: Duration,
         bound: Duration,
     ) -> Self {
@@ -71,13 +88,31 @@ impl Held {
         let policy = &*self.policy;
         // Freed after the breaker, as a run's drop hands a probe's turn on before
         // its slot — and as the breaker's telling unwinds, should a line panic.
-        let _slot = self
-            .slot
-            .take()
-            .zip(policy.bulkhead.as_ref())
-            .map(|(slot, bulkhead)| bulkhead.resume(slot));
-        match self.attempt.take().zip(policy.breaker.as_ref()) {
-            Some((attempt, breaker)) => breaker.resume(attempt).ended(failure),
+        let _slot = self.slot.take().map(|slot| match slot {
+            Slot::Own(slot) => policy
+                .bulkhead
+                .as_ref()
+                .map(|bulkhead| bulkhead.resume(slot)),
+            Slot::Shared(shared) => {
+                drop(shared);
+                None
+            }
+        });
+        match self.attempt.take() {
+            Some(Attempt::Own(attempt)) => match &policy.breaker {
+                Some(breaker) => breaker.resume(attempt).ended(failure),
+                None => Ok(()),
+            },
+            Some(Attempt::Shared(turn)) => match failure.map(Failure::said).transpose() {
+                Ok(said) => {
+                    turn.ended(said);
+                    Ok(())
+                }
+                Err(payload) => {
+                    turn.ended(Some(Cow::Borrowed(PANICKED)));
+                    Err(payload)
+                }
+            },
             None => Ok(()),
         }
     }

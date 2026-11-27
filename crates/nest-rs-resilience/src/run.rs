@@ -22,7 +22,7 @@ use nest_rs_database::AtomicError;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::DropGuard;
 
-use crate::attempting::{Attempting, Turn};
+use crate::attempting::{Attempting, Lent, SharedSlot, SharedTurn, Taken};
 use crate::breaker::{Breaker, Cut, Failure, Pass, Sent};
 use crate::bulkhead::{Full, Slot};
 use crate::call::{Calling, Erased, Judged, Placing, Reads};
@@ -113,7 +113,8 @@ impl<'p> Terms<'p> {
     /// its turn, telling the breaker when it has answered at the latest;
     /// otherwise it is refused, taking nothing, told the time to that token.
     /// With no rate, nothing of the rate's runs: no lock, no clock read, no
-    /// timer.
+    /// timer. A call sharing the turn of the attempt it is made in asks the
+    /// breaker nothing, and one holding that attempt's `token` takes none.
     // Inlined, the rate's step alone left out of line: a run with no rate pays no
     // call to be let through.
     #[inline(always)]
@@ -121,6 +122,8 @@ impl<'p> Terms<'p> {
         &self,
         pass: &mut Option<Pass<'p>>,
         reserved: &mut Option<Reservation<'p>>,
+        shares: bool,
+        token: bool,
     ) -> Admission<'p> {
         let bound = self.bound();
         if bound.wait.is_zero() {
@@ -128,7 +131,7 @@ impl<'p> Terms<'p> {
         }
         // While this one waited for its token, another call may have opened the
         // breaker or taken the probe's turn, and a manual switch voids a turn held.
-        if !pass.as_ref().is_some_and(Pass::probes) {
+        if !shares && !pass.as_ref().is_some_and(Pass::probes) {
             match self
                 .policy
                 .breaker
@@ -143,8 +146,8 @@ impl<'p> Terms<'p> {
             }
         }
         match &self.policy.rate {
-            Some(rate) => self.token(rate, pass, reserved, bound),
-            None => Admission::Through(pass.take(), bound),
+            Some(rate) if !token => self.token(rate, pass, reserved, bound),
+            _ => Admission::Through(pass.take(), bound),
         }
     }
 
@@ -199,6 +202,8 @@ pin_project_lite::pin_project! {
         // is handed to finds the token this one left.
         reserved: Option<Reservation<'p>>,
         pass: Option<Pass<'p>>,
+        // Whether the call shares the turn of the attempt it is made in.
+        shares: bool,
         #[pin]
         due: Sleep,
     }
@@ -222,7 +227,10 @@ impl<'p> Future for Admitted<'p> {
                 }
             }
             ready!(this.due.as_mut().poll(cx));
-            match this.terms.admit(this.pass, this.reserved) {
+            match this
+                .terms
+                .admit(this.pass, this.reserved, *this.shares, false)
+            {
                 Admission::Through(pass, bound) => return Poll::Ready(Ok((pass, bound))),
                 Admission::Refused(refusal) => return Poll::Ready(Err(refusal)),
                 Admission::Postponed(at) => this.due.as_mut().reset(at),
@@ -326,6 +334,9 @@ enum Attempt<'p> {
     /// — a response's body — may still undo: dropped so, the success stands.
     #[cfg(feature = "reqwest")]
     Outstanding(Outstanding<'p>),
+    /// Sent on the turn of the attempt it is made in, a call of that
+    /// attempt's policy: its failure is that attempt's.
+    Shared(SharedTurn),
 }
 
 /// A success left in the breaker, settled as it was judged once dropped.
@@ -341,75 +352,29 @@ impl Drop for Outstanding<'_> {
     }
 }
 
-/// The attempt let through with `pass`, sent under `bound`, in the breaker.
-#[inline]
-fn sent(pass: Option<Pass<'_>>, bound: Bound) -> Option<Sent<'_>> {
-    pass.map(|pass| pass.send(bound.wait, bound.until))
-}
-
 /// One poll of an attempt's call, lending the calls of its policy it makes
-/// what its run holds of that policy — its slot, and its turn while no call
-/// took it — and taking back, as the poll ends or unwinds, what none took: a
-/// slot taken goes with its call, and a turn taken makes that call's outcome
-/// the attempt's.
-struct Lending<'r, 'p> {
+/// what the attempt shares — its slot, its turn and its token — and taking it
+/// back, as those calls left it, as the poll ends or unwinds.
+struct Lending<'r> {
     attempting: Attempting,
-    policy: &'p Mechanisms,
-    slot: &'r mut Option<Slot<'p>>,
-    attempt: &'r mut Option<Attempt<'p>>,
-    lends: &'r mut bool,
+    lent: &'r mut Lent,
 }
 
-impl<'r, 'p> Lending<'r, 'p> {
+impl<'r> Lending<'r> {
     #[inline]
-    fn enter(
-        policy: &'p Mechanisms,
-        slot: &'r mut Option<Slot<'p>>,
-        attempt: &'r mut Option<Attempt<'p>>,
-        lends: &'r mut bool,
-    ) -> Self {
-        let held = policy
-            .bulkhead
-            .as_ref()
-            .and_then(|bulkhead| slot.take().map(|slot| bulkhead.hold(slot)));
-        let turn = lends.then(|| Turn {
-            attempt: match attempt.take() {
-                Some(Attempt::Sent(sent)) => Some(sent.lend()),
-                other => {
-                    *attempt = other;
-                    None
-                }
-            },
-        });
+    fn enter(policy: &Mechanisms, lent: &'r mut Lent) -> Self {
         Self {
-            attempting: Attempting::enter(policy, held, turn),
-            policy,
-            slot,
-            attempt,
-            lends,
+            attempting: Attempting::enter(policy, lent),
+            lent,
         }
     }
 }
 
-impl Drop for Lending<'_, '_> {
+impl Drop for Lending<'_> {
     #[inline]
     fn drop(&mut self) {
-        let (slot, turn) = self.attempting.leave();
-        if let Some(held) = slot
-            && let Some(bulkhead) = &self.policy.bulkhead
-        {
-            *self.slot = Some(bulkhead.resume(held));
-        }
-        match turn {
-            Some(Turn { attempt }) => {
-                if let Some(lent) = attempt
-                    && let Some(breaker) = &self.policy.breaker
-                {
-                    let until = lent.until();
-                    *self.attempt = Some(Attempt::Sent(breaker.adopt(lent, until)));
-                }
-            }
-            None => *self.lends = false,
+        if let Some(back) = self.attempting.leave() {
+            *self.lent = back;
         }
     }
 }
@@ -419,7 +384,8 @@ pin_project_lite::pin_project! {
     pub(crate) struct Run<'p> {
         // Dropped in order: the attempt in the breaker, handing on a probe's turn,
         // then its token, its savepoint, what the run waits on — a reservation,
-        // then a probe's pass — and its slot of the bulkhead.
+        // then a probe's pass — and its slot of the bulkhead, its own or the one
+        // it shares.
         attempt: Option<Attempt<'p>>,
         given_up: Option<DropGuard>,
         savepoint: Option<Savepoint>,
@@ -427,6 +393,9 @@ pin_project_lite::pin_project! {
         #[pin]
         wait: Wait<'p>,
         slot: Option<Slot<'p>>,
+        // The slot of the attempt the run is made in, shared while the run holds
+        // none of its own.
+        shared_slot: Option<SharedSlot>,
         terms: Terms<'p>,
         // The bound the last attempt was sent under.
         bound: Duration,
@@ -452,9 +421,8 @@ pin_project_lite::pin_project! {
         // Whether the run opened inside an attempt of its own policy, a call that
         // attempt makes: sent once, the attempt around it being what is sent again.
         nested: bool,
-        // Whether the last attempt still lends its turn — its attempt in the
-        // breaker and its token — to the first call of its policy it makes.
-        lends: bool,
+        // What the last attempt shares with the calls of its policy it makes.
+        lent: Lent,
     }
 }
 
@@ -476,6 +444,7 @@ impl<'p> Run<'p> {
             settling: None,
             wait: Wait::within(),
             slot: None,
+            shared_slot: None,
             terms: Terms {
                 policy,
                 method,
@@ -496,7 +465,7 @@ impl<'p> Run<'p> {
             holds: false,
             sent_at: None,
             nested: false,
-            lends: false,
+            lent: Lent::default(),
         }
     }
 
@@ -541,10 +510,10 @@ impl<'p> Run<'p> {
     /// the rate as it stands once it holds its slot: refused there by a token
     /// still past the rate's wait. It is refused `Full` once no slot is freed
     /// for it in time or as many calls wait for one as may. A refusal is
-    /// counted and told. Opened inside an attempt of its own policy, it takes
-    /// the slot that attempt still lends, when it does, and is opened so
-    /// otherwise; once its run's last attempt lent its slot, the run waits
-    /// here for one again ([`poll_back_off`](Self::poll_back_off)).
+    /// counted and told. Opened inside an attempt of its own policy, it shares
+    /// that attempt's slot while no other call does; otherwise it is opened
+    /// so, and takes the attempt's slot should it come back before one is
+    /// freed.
     pub(crate) fn poll_open(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -559,10 +528,10 @@ impl<'p> Run<'p> {
                 *this.nested = true;
                 *this.retries = 0;
                 // The attempt's own slot, which a bulkhead of one would otherwise refuse it.
-                if let Some(bulkhead) = &policy.bulkhead
-                    && let Some(lent) = Attempting::slot(policy)
+                if policy.bulkhead.is_some()
+                    && let Some(shared) = Attempting::slot(policy)
                 {
-                    *this.slot = Some(bulkhead.resume(lent));
+                    *this.shared_slot = Some(shared);
                     return Poll::Ready(Ok(()));
                 }
             }
@@ -599,6 +568,16 @@ impl<'p> Run<'p> {
             *this.stage = Stage::Entering;
         }
         if *this.stage == Stage::Entering {
+            if *this.nested {
+                let policy = this.terms.policy;
+                if let Some(shared) = Attempting::slot(policy) {
+                    this.wait.set(Wait::within());
+                    *this.shared_slot = Some(shared);
+                    *this.stage = Stage::Arriving;
+                    return Poll::Ready(Ok(()));
+                }
+                Attempting::wait_for_slot(policy, cx.waker());
+            }
             let WaitProj::Entering { entering } = this.wait.as_mut().project() else {
                 unreachable!("a run waits for the slot it found none free of");
             };
@@ -626,26 +605,41 @@ impl<'p> Run<'p> {
     /// cancellation token, when its call takes one, cancelled when it is given
     /// up. A panic in the call, or in a predicate judging its answer, counts
     /// as a failure, and is handed back for the run to roll the attempt's
-    /// savepoint back before it unwinds on.
+    /// savepoint back before it unwinds on. A run opened inside an attempt of
+    /// its own policy shares that attempt's turn of the breaker, a probe's
+    /// included, while no other call does, and takes its token of the rate
+    /// when no call took it: it then asks the breaker nothing, or the rate.
     pub(crate) fn poll_attempt(
         mut self: Pin<&mut Self>,
         mut call: Pin<&mut (dyn Calling + '_)>,
         cx: &mut Context<'_>,
     ) -> Poll<Ended> {
-        if self.stage == Stage::Arriving && self.nested {
-            self.as_mut().take_turn();
-        }
         if self.stage == Stage::Arriving {
+            let Taken { turn, token } = if self.nested {
+                Attempting::take(self.terms.policy)
+            } else {
+                Taken::NOTHING
+            };
+            let shares = turn.is_some();
             let (mut pass, mut reserved) = (None, None);
-            match self.terms.admit(&mut pass, &mut reserved) {
-                Admission::Through(pass, bound) => self.as_mut().send(sent(pass, bound), bound),
-                Admission::Refused(refusal) => return Poll::Ready(Ended::Refused(refusal)),
+            let admitted = self.terms.admit(&mut pass, &mut reserved, shares, token);
+            if let Some(turn) = turn {
+                *self.as_mut().project().attempt = Some(Attempt::Shared(turn));
+            }
+            match admitted {
+                Admission::Through(pass, bound) => self.as_mut().send(pass, bound),
+                Admission::Refused(refusal) => {
+                    // A turn shared and not sent on goes back at once.
+                    *self.as_mut().project().attempt = None;
+                    return Poll::Ready(Ended::Refused(refusal));
+                }
                 Admission::Postponed(at) => {
                     let mut this = self.as_mut().project();
                     let admitted = Box::pin(Admitted {
                         terms: *this.terms,
                         reserved,
                         pass,
+                        shares,
                         due: tokio::time::sleep_until(at),
                     });
                     this.wait.set(Wait::Admitting { admitted });
@@ -662,8 +656,11 @@ impl<'p> Run<'p> {
             this.wait.set(Wait::within());
             *this.stage = Stage::Arriving;
             match admitted {
-                Ok((pass, bound)) => self.as_mut().send(sent(pass, bound), bound),
-                Err(refusal) => return Poll::Ready(Ended::Refused(refusal)),
+                Ok((pass, bound)) => self.as_mut().send(pass, bound),
+                Err(refusal) => {
+                    *self.as_mut().project().attempt = None;
+                    return Poll::Ready(Ended::Refused(refusal));
+                }
             }
         }
         let this = self.as_mut().project();
@@ -675,7 +672,7 @@ impl<'p> Run<'p> {
             given_up: this.given_up,
         };
         let polled = {
-            let _lending = Lending::enter(this.terms.policy, this.slot, this.attempt, this.lends);
+            let _lending = Lending::enter(this.terms.policy, this.lent);
             match this.savepoint {
                 Some(savepoint) => within.poll(pin!(savepoint.around(Pin::new(&mut erased))), cx),
                 None => within.poll(Pin::new(&mut erased), cx),
@@ -685,37 +682,24 @@ impl<'p> Run<'p> {
         Poll::Ready(self.settle(call, answered))
     }
 
-    /// The first attempt of a run opened inside an attempt of its own policy,
-    /// sent under its own bound with the turn that attempt still lends — its
-    /// attempt in the breaker, a probe's included, and its token — when no
-    /// call it made took it: the run is then the call that attempt counts by.
-    /// Any other is let through as [`Terms::admit`] says.
-    fn take_turn(self: Pin<&mut Self>) {
-        let bound = self.terms.bound();
-        if bound.wait.is_zero() {
-            return;
-        }
-        let policy = self.terms.policy;
-        if let Some(Turn { attempt }) = Attempting::turn(policy) {
-            let sent = attempt
-                .zip(policy.breaker.as_ref())
-                .map(|(lent, breaker)| breaker.adopt(lent, bound.until));
-            self.send(sent, bound);
-        }
-    }
-
-    /// The attempt let through as `sent`, its outcome in the breaker, under
-    /// `bound`: its call is made at its first poll, inside the bound, so one
-    /// panicking before it hands back its future fails the attempt as a panic
-    /// while it runs does. A retry counts on the retries' counter.
-    fn send(self: Pin<&mut Self>, sent: Option<Sent<'p>>, bound: Bound) {
+    /// The attempt let through with `pass`, its outcome in the breaker, or on
+    /// the turn it shares, under `bound`: its call is made at its first poll,
+    /// inside the bound, so one panicking before it hands back its future
+    /// fails the attempt as a panic while it runs does. A retry counts on the
+    /// retries' counter.
+    fn send(self: Pin<&mut Self>, pass: Option<Pass<'p>>, bound: Bound) {
         let this = self.project();
         if *this.resent > 0 {
             this.terms.policy.teller.resent();
         }
-        *this.attempt = sent.map(Attempt::Sent);
-        // A policy with no breaker and no rate has no turn to lend.
-        *this.lends = this.terms.policy.breaker.is_some() || this.terms.policy.rate.is_some();
+        if let Some(pass) = pass {
+            *this.attempt = Some(Attempt::Sent(pass.send(bound.wait, bound.until)));
+        }
+        this.lent.renew(
+            this.slot.is_some() || this.shared_slot.is_some(),
+            this.attempt.is_some(),
+            this.terms.policy.rate.is_some(),
+        );
         *this.bound = bound.wait;
         if *this.holds {
             *this.sent_at = Some(Instant::now());
@@ -753,28 +737,54 @@ impl<'p> Run<'p> {
             catch_unwind(AssertUnwindSafe(|| call.judge(idempotent))).map_err(Unanswered::Panicked)
         });
         let mut judged = judged;
-        if let Some(Attempt::Sent(sent)) = this.attempt.take() {
-            let counted = match judged {
+        // A call that shared the attempt's turn failed: the attempt has failed,
+        // whatever it answered.
+        let shared = this.lent.failed();
+        let failed = match &judged {
+            Ok(Verdict::Failed { .. } | Verdict::Final) => {
+                Some(call.failure().unwrap_or(Failure::Said(FAILED)))
+            }
+            Ok(_) => shared.as_deref().map(Failure::Told),
+            Err(Unanswered::Panicked(_)) => Some(Failure::Said(PANICKED)),
+            Err(_) => Some(Failure::Said(TIMED_OUT)),
+        };
+        let counted = match this.attempt.take() {
+            Some(Attempt::Sent(sent)) => match (failed, &judged) {
+                (Some(failure), _) => sent.ended(Some(failure)),
                 // What the answer still owes — a response's body — may undo it.
                 #[cfg(feature = "reqwest")]
-                Ok(Verdict::Succeeded) if *this.holds => {
+                (None, Ok(Verdict::Succeeded)) if *this.holds => {
                     *this.attempt = Some(Attempt::Outstanding(Outstanding(Some(sent))));
                     Ok(())
                 }
-                Ok(Verdict::Succeeded | Verdict::Again) => sent.ended(None),
-                Ok(Verdict::Failed { .. } | Verdict::Final) => {
-                    sent.ended(Some(call.failure().unwrap_or(Failure::Said(FAILED))))
-                }
-                Ok(Verdict::Ignored | Verdict::IgnoredAgain { .. }) => {
+                (None, Ok(Verdict::Ignored | Verdict::IgnoredAgain { .. })) => {
                     sent.ignore();
                     Ok(())
                 }
-                Err(Unanswered::Panicked(_)) => sent.ended(Some(Failure::Said(PANICKED))),
-                Err(_) => sent.ended(Some(Failure::Said(TIMED_OUT))),
-            };
-            if let Err(payload) = counted {
-                judged = Err(Unanswered::Panicked(payload));
-            }
+                (None, _) => sent.ended(None),
+            },
+            Some(Attempt::Shared(turn)) => match failed.map(Failure::said).transpose() {
+                // What the answer still owes — a response's body — may fail it.
+                #[cfg(feature = "reqwest")]
+                Ok(None) if *this.holds && matches!(judged, Ok(Verdict::Succeeded)) => {
+                    *this.attempt = Some(Attempt::Shared(turn));
+                    Ok(())
+                }
+                Ok(said) => {
+                    turn.ended(said);
+                    Ok(())
+                }
+                Err(payload) => {
+                    turn.ended(Some(Cow::Borrowed(PANICKED)));
+                    Err(payload)
+                }
+            },
+            #[cfg(feature = "reqwest")]
+            Some(Attempt::Outstanding(_)) => unreachable!("an attempt settles once"),
+            None => Ok(()),
+        };
+        if let Err(payload) = counted {
+            judged = Err(Unanswered::Panicked(payload));
         }
         let given_up = this.given_up.take();
         match judged {
@@ -891,9 +901,7 @@ impl<'p> Run<'p> {
         *this.stage = Stage::BackingOff;
     }
 
-    /// The backoff waited out, the next attempt counted as a retry, and a slot
-    /// the last attempt lent taken again: a free one at once, or the run left
-    /// to wait for one in [`poll_open`](Self::poll_open).
+    /// The backoff waited out, and the next attempt counted as a retry.
     pub(crate) fn poll_back_off(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let mut this = self.project();
         if let WaitProj::BackingOff { backoff } = this.wait.as_mut().project() {
@@ -901,21 +909,6 @@ impl<'p> Run<'p> {
             this.wait.set(Wait::within());
             *this.resent = this.resent.saturating_add(1);
             *this.stage = Stage::Arriving;
-            // A slot lent to a call the last attempt made went with that call: the
-            // next attempt takes one of its own, through `poll_open`.
-            if this.slot.is_none()
-                && let Some(bulkhead) = &this.terms.policy.bulkhead
-            {
-                match bulkhead.try_enter() {
-                    Some(free) => *this.slot = Some(free),
-                    None => {
-                        this.wait.set(Wait::Entering {
-                            entering: Box::pin(bulkhead.enter(this.terms.deadline)),
-                        });
-                        *this.stage = Stage::Entering;
-                    }
-                }
-            }
         }
         Poll::Ready(())
     }
@@ -964,11 +957,6 @@ impl<'p> Run<'p> {
             }
             if self.stage == Stage::BackingOff {
                 ready!(self.as_mut().poll_back_off(cx));
-            }
-            if self.stage == Stage::Entering
-                && let Err(refusal) = ready!(self.as_mut().poll_open(cx))
-            {
-                return Poll::Ready(Over::Refused(refusal));
             }
             let mut ended = ready!(self.as_mut().poll_attempt(call.as_mut(), cx));
             let retry = match ended {
@@ -1057,6 +1045,7 @@ impl<'p> Run<'p> {
     fn over(self: Pin<&mut Self>) {
         let mut this = self.project();
         *this.slot = None;
+        *this.shared_slot = None;
         *this.stage = Stage::Answered;
         this.wait.set(Wait::within());
     }
@@ -1075,17 +1064,22 @@ impl Run<'_> {
             unreachable!("an answer held past its run was sent");
         };
         let policy = this.terms.policy;
-        let outstanding = match this.attempt.take() {
-            Some(Attempt::Outstanding(mut outstanding)) => outstanding.0.take(),
+        let attempt = match this.attempt.take() {
+            Some(Attempt::Outstanding(mut outstanding)) => outstanding
+                .0
+                .take()
+                .map(|sent| crate::held::Attempt::Own(sent.hold(bound))),
+            Some(Attempt::Shared(turn)) => Some(crate::held::Attempt::Shared(turn)),
             _ => None,
+        };
+        let slot = match this.slot.take().zip(policy.bulkhead.as_ref()) {
+            Some((slot, bulkhead)) => Some(crate::held::Slot::Own(bulkhead.hold(slot))),
+            None => this.shared_slot.take().map(crate::held::Slot::Shared),
         };
         crate::held::Held::new(
             Arc::clone(policy),
-            outstanding.map(|sent| sent.hold(bound)),
-            this.slot
-                .take()
-                .zip(policy.bulkhead.as_ref())
-                .map(|(slot, bulkhead)| bulkhead.hold(slot)),
+            attempt,
+            slot,
             (sent_at + bound).saturating_duration_since(Instant::now()),
             bound,
         )
@@ -1098,6 +1092,7 @@ impl Run<'_> {
         let this = self.project();
         *this.attempt = None;
         *this.slot = None;
+        *this.shared_slot = None;
     }
 }
 
@@ -6775,13 +6770,13 @@ mod tests {
     #[instance]
     struct Between;
 
-    /// The first call nested in an attempt of its own policy, directly or
-    /// through a call of another policy, takes that attempt's turn of the
-    /// breaker, slot and token, and counts once, for it. A probe whose call
-    /// nests one of its own policy closes the breaker, where each nested call
-    /// took the probe's turn from itself and was refused, the breaker opening
-    /// again forever; a second nested beside the first is refused as any call
-    /// beside a probe is.
+    /// A call nested in an attempt of its own policy, directly or through a
+    /// call of another policy, shares that attempt's turn of the breaker and
+    /// slot while no other call does, the first taking its token, and counts
+    /// in that attempt, once. A probe whose call nests one of its own policy
+    /// closes the breaker, where each nested call took the probe's turn from
+    /// itself and was refused, the breaker opening again forever; a second
+    /// nested beside the first is refused as any call beside a probe is.
     #[tokio::test(start_paused = true)]
     async fn the_first_call_nested_in_an_attempt_of_its_own_policy_counts_for_it() {
         let probed = policy(probing(Duration::from_secs(5)));
@@ -6886,10 +6881,11 @@ mod tests {
     }
 
     /// Calls fanned out inside one attempt of their own policy are each a
-    /// call of it: the attempt's slot, token and turn of the breaker go to the
-    /// first, every other takes its own, and each counts its outcome. Twenty
-    /// pages under a bulkhead of two and a rate of two send two, read alone or
-    /// inside one attempt, at most two at once, each failure counted.
+    /// call of it: the attempt shares its slot and its turn of the breaker
+    /// with one of them at a time and its token with the first, every other
+    /// takes its own and counts its outcome. Twenty pages under a bulkhead of
+    /// two and a rate of two send two, read alone or inside one attempt, at
+    /// most two at once, each failure counted.
     #[tokio::test(start_paused = true)]
     async fn calls_fanned_out_in_an_attempt_of_their_own_policy_each_meet_its_terms() {
         let partner = policy(ResilienceConfig {
@@ -6942,16 +6938,117 @@ mod tests {
         assert_eq!(
             counted(&partner),
             (4, 4),
-            "each page counted, the import by the first it made"
+            "each page counted, the import failed by the first it made"
         );
         assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
     }
 
-    /// A run whose attempt lent its slot to a call of its policy it made — the
-    /// slot going with that call — takes one again before its next attempt:
-    /// every attempt of a run is sent holding a slot.
+    /// An attempt holds its slot until it answers: a call of its policy it
+    /// makes shares that slot while it runs and gives it back as it ends, so
+    /// what the attempt does after it still runs inside the bulkhead. Three
+    /// pushes under a bulkhead of one, each fetching a token of the policy's
+    /// first, run one at a time; and pages an attempt fans out under a bulkhead
+    /// of one are read one at a time on its slot, each handed it as the one
+    /// before gives it back.
     #[tokio::test(start_paused = true)]
-    async fn a_run_whose_attempt_lent_its_slot_takes_one_again_before_its_retry() {
+    async fn an_attempt_holds_its_slot_past_a_call_of_its_policy_it_made() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(60)),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let (running, most) = (AtomicU32::new(0), AtomicU32::new(0));
+        let (running, most, partner) = (&running, &most, &partner);
+        let in_flight = move || async move {
+            let now = running.fetch_add(1, Ordering::Relaxed) + 1;
+            most.fetch_max(now, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            running.fetch_sub(1, Ordering::Relaxed);
+            Ok::<_, Refused>(())
+        };
+        let push = move || async move {
+            partner
+                .run(|| async { Ok::<_, Refused>("token") })
+                .await
+                .map_err(|_refused| Refused)?;
+            in_flight().await
+        };
+        let pushed = all((0..3).map(|_| partner.run(push))).await;
+        assert!(pushed.iter().all(Result::is_ok), "{pushed:?}");
+        assert_eq!(
+            most.swap(0, Ordering::Relaxed),
+            1,
+            "one push in flight at once, its token fetched first"
+        );
+        assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
+
+        let imported = partner
+            .run(|| async { Ok::<_, Refused>(all((0..5).map(|_| partner.run(in_flight))).await) })
+            .await
+            .expect("the import answers what its pages did");
+        assert!(imported.iter().all(Result::is_ok), "{imported:?}");
+        assert_eq!(most.load(Ordering::Relaxed), 1, "one page read at a time");
+        assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
+    }
+
+    /// An attempt counts once in the breaker, failed when its own answer or a
+    /// call of its policy sharing its turn failed: a charge whose token came
+    /// back but which failed opens a breaker of one failure, and a probe so
+    /// opens the breaker again, where the token's success alone was counted.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_whose_call_of_its_policy_succeeded_counts_its_own_failure() {
+        let billing = policy(probing(Duration::from_secs(5)));
+        let charge = || async {
+            billing
+                .run(|| async { Ok::<_, Refused>("token") })
+                .await
+                .map_err(|_refused| Refused)?;
+            Err::<(), _>(Refused)
+        };
+        let charged = billing.run(charge).await;
+        assert!(
+            matches!(charged, Err(ResilienceError::Failed(Refused))),
+            "{charged:?}"
+        );
+        assert!(
+            matches!(billing.breaker_state(), Some(BreakerState::Open { .. })),
+            "the charge's own failure counted: {:?}",
+            billing.breaker_state()
+        );
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let probed = billing.run(charge).await;
+        assert!(
+            matches!(probed, Err(ResilienceError::Failed(Refused))),
+            "{probed:?}"
+        );
+        assert!(
+            matches!(billing.breaker_state(), Some(BreakerState::Open { .. })),
+            "the probe failed, its token's success notwithstanding: {:?}",
+            billing.breaker_state()
+        );
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let recovered = billing
+            .run(|| async {
+                billing.run(|| async { Err::<(), _>(Refused) }).await.ok();
+                Ok::<_, Refused>(())
+            })
+            .await;
+        assert!(recovered.is_ok(), "{recovered:?}");
+        assert!(
+            matches!(billing.breaker_state(), Some(BreakerState::Open { .. })),
+            "a call sharing the probe's turn failed: the probe failed"
+        );
+    }
+
+    /// A run holds its slot through its retries, a call of its policy one of
+    /// its attempts made having shared it: every attempt of a run is sent
+    /// holding a slot.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_holds_its_slot_through_its_retries_once_a_call_of_its_policy_shared_it() {
         let policy = policy(ResilienceConfig {
             retries: Some(1),
             concurrency: Some(1),

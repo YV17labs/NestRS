@@ -194,17 +194,22 @@ was.
   in counts as a timeout in its own breaker: under an outer timeout of two
   seconds, an answer due after three is a failure there, whatever the inner
   timeout. One on a task the call spawned goes to its own bound.
-- **A call made inside an attempt of its own policy takes that attempt's turn
-  first.** When a decorated method calls another of its policy, directly or
-  through a call under another, the first such call takes the attempt's slot,
-  token and turn of the breaker, and its outcome is the attempt's, counted once:
-  a probe making it closes the breaker as any other does, and a bulkhead of one
-  does not refuse it. Every other call the attempt makes takes its own slot,
-  token and turn, and counts its own outcome, so twenty pages read inside one
-  `import()` meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Each
-  is sent under its own timeout, and once: the attempt around it is what the
-  policy sends again. A call spawned onto a task of its own is a call of its
-  own.
+- **A call made inside an attempt of its own policy shares that attempt's slot
+  and turn.** A decorated method may call another of its policy, directly or
+  through a call under another. Such a call shares the attempt's slot and turn of
+  the breaker while no other call does, and gives them back as it ends. The first
+  takes the attempt's token. The attempt counts once in the breaker: as a failure
+  when its own answer fails or a call sharing its turn failed, otherwise as its
+  own answer is judged. So a `charge()` that fails after its token helper
+  answered counts a failure, a failure propagated counts once, and a probe so
+  shaped closes the breaker only if both succeed. The attempt holds its slot
+  until it answers, so `CONCURRENCY` bounds its body past the call, and a
+  bulkhead of one does not refuse the call. A call made while another shares the
+  slot and turn takes its own slot, token and turn, refused `Open` beside a
+  probe, and counts its own outcome. So twenty pages read inside one `import()`
+  meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Each is sent under
+  its own timeout, and once: the attempt around it is what the policy sends
+  again. A call spawned onto a task of its own is a call of its own.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no
   `fallback` and no `record_if` naming an argument, an argument the body reads nowhere and the part
